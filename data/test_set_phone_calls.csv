@@ -1,0 +1,21 @@
+call_id,summary,expected_decision,priority,reason_code,flags
+T01,"Kothrud 3BHK 1,400 sq ft; done by March, no rush; owner, husband agrees",Qualified,P2,,Referral (Shruti Joshi)
+T02,"Wakad 2BHK 950 sq ft; moving in November; pushed twice for a price",Qualified,P1,,Asked for price - deflected and booked
+T03,"Nashik home office and study",Not qualified,,OUT_OF_AREA,
+T04,"Living room ideas only, just exploring",Not qualified,,ADVICE_ONLY,
+T05,"Koregaon Park 4BHK 2,400 sq ft; back in by February; already moved out",Qualified,P1,,Referral (Vikram Agarwal); wants site visit
+T06,"Baner office 800 sq ft bare shell; 20 workstations; live by December; founder",Qualified,P1,,Commercial
+T07,"Living room and kitchen before Diwali, 3 weeks away",Nurture,,TIMELINE_IMPOSSIBLE,Open to a November start
+T08,"Missed call at 10:47pm, no voicemail",No data,,NO_INFO,Agent would have answered
+T09,"Existing client; designer Aryan silent for 5 days",Escalate,,EXISTING_CLIENT_COMPLAINT,Senior callback within 15 min
+T10,"Kharadi 1BHK; volunteered Rs 1-1.5 lakh for kitchen and bedroom",Not qualified,,BUDGET_MISALIGNED,
+T11,"Baner rented 2BHK; 3-year lease; landlord agrees; no structural work",Qualified,P2,,Rented - reversible fittings; timeline not asked
+T12,"Kalyani Nagar villa 5,500 sq ft new; March; wants meeting this week or next",Qualified,P1,,Wants principal designer on site
+T13,"Aundh 3BHK 1,100 sq ft; pushed for a range",Qualified,P2,,Asked for price - deflected and booked; timeline not asked
+T14,"Son calling for parents' Hadapsar 3BHK; parents decide and will attend",Qualified,P2,,Decision-maker unclear - parents must attend
+T15,"Undri 2BHK 875 sq ft; possession in 6 weeks; start design now",Qualified,P1,,Builder allows site visit now
+T16,"Viman Nagar 3BHK; called Monday, nobody called back",Qualified,P1,,Frustrated returning caller - handle with care
+T17,"Pimple Saudagar 3BHK 1,050 sq ft; done by March",Qualified,P2,,Line dropped once and called back
+T18,"180 sq ft coworking pod",Not qualified,,TOO_SMALL,Minimum office size not in services.md
+T19,"Restaurant in Koregaon Park",Not qualified,,OUT_OF_SCOPE_TYPE,
+T20,"Magarpatta 2BHK 900 sq ft; January start; owners",Qualified,P2,,Both owners will attend

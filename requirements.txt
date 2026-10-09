@@ -1,0 +1,5 @@
+# Vercel (webhooks, cron, dashboard) needs only psycopg; everything else is standard library.
+# The voice host (voice_server/) and the local simulators need these:
+psycopg[binary]>=3.2   # Neon/Postgres call log (Vercel + voice host)
+anthropic>=1.12
+websockets>=15

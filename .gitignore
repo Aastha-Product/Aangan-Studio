@@ -1,0 +1,16 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# local environment + caches
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.vercel/
+.claude/
+
+# local data: call logs, Vaani config backups, Gemini extraction cache, demo data
+out/*
+!out/acceptance_report.md
