@@ -95,3 +95,6 @@ alter table calls add column if not exists site_address text;
 alter table calls add column if not exists booking_provider text;
 alter table calls add column if not exists processing_started_at timestamptz;
 alter table calls add column if not exists priority_reasons text[];
+alter table calls add column if not exists handled_at timestamptz;   -- follow-up done (dashboard "Mark as done")
+alter table calls add column if not exists handled_by text;
+alter table calls add column if not exists handled_note text;

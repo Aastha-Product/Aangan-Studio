@@ -396,6 +396,41 @@ class OtherEndpoints(Base):
         self.assertTrue(status.startswith("200"))
         self.assertIn("Report card for d1", page)            # activity log shows what happened after the call
 
+    def test_mark_done_reopen_and_overturn(self):
+        now = config.now_ist()
+        self.store.upsert_call({"call_id": "p1", "started_at": now.isoformat(), "decision": "Qualified",
+                                "status": "booking_pending", "caller_name": "Pending caller"})
+        self.store.upsert_call({"call_id": "n1", "started_at": now.isoformat(), "decision": "Not qualified",
+                                "status": "not_qualified", "reason_code": "OUT_OF_AREA", "caller_name": "Nashik caller"})
+        page = wsgi("GET", "/dashboard?token=dash_test")[1]
+        self.assertIn("Pending caller", page.split("Needs attention")[1].split("Why calls")[0])
+
+        def post(body):
+            return wsgi("POST", "/dashboard/call/action", body=body.encode(),
+                        headers={"CONTENT_TYPE": "application/x-www-form-urlencoded"})
+        self.assertTrue(post("call_id=p1&action=done")[0].startswith("401"))       # no token, no change
+        self.assertTrue(post("call_id=p1&action=done&token=dash_test&by=Front+desk&note=Booked+Tue")[0].startswith("303"))
+        self.assertEqual(self.store.get_call("p1")["handled_by"], "Front desk")
+        page = wsgi("GET", "/dashboard?token=dash_test")[1]
+        self.assertNotIn("Pending caller", page.split("Needs attention")[1].split("Why calls")[0])
+        post("call_id=p1&action=reopen&token=dash_test")
+        self.assertIsNone(self.store.get_call("p1")["handled_at"])
+
+        post("call_id=n1&action=overturn&token=dash_test&by=Riya")
+        self.assertEqual(dashboard.group_of(self.store.get_call("n1")), "follow_up")
+        self.assertIn("rejection overturned", wsgi("GET", "/dashboard/call?call_id=n1&token=dash_test")[1])
+        self.assertTrue(post("call_id=n1&action=delete&token=dash_test")[0].startswith("400"))
+
+    def test_csv_export(self):
+        now = config.now_ist()
+        self.store.upsert_call({"call_id": "x1", "started_at": now.isoformat(), "decision": "Not qualified",
+                                "status": "not_qualified", "reason_code": "OUT_OF_AREA", "caller_name": "Suresh, Nashik"})
+        status, out = wsgi("GET", "/dashboard/export.csv?token=dash_test&period=7")
+        self.assertTrue(status.startswith("200"))
+        self.assertIn('"Suresh, Nashik"', out)                 # commas in names are quoted
+        self.assertIn("Outside Pune / PCMC", out)
+        self.assertTrue(wsgi("GET", "/dashboard/export.csv")[0].startswith("401"))
+
     def test_dashboard_empty_state(self):
         status, page = wsgi("GET", "/dashboard?token=dash_test")
         self.assertTrue(status.startswith("200"))

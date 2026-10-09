@@ -141,6 +141,7 @@ class PostgresStore:
         self.dsn = dsn or config.DATABASE_URL
         self._conn = None
         self._cols: dict[str, dict[str, str]] = {}
+        self._unknown: dict[str, set] = {}
 
     def _connect(self):
         import psycopg
@@ -176,6 +177,15 @@ class PostgresStore:
     def _prepare(self, table: str, row: dict) -> dict:
         from psycopg.types.json import Jsonb
         cols = self.columns(table)
+        # A migration may have added columns since this instance read them: re-read once per new unknown key.
+        seen = self._unknown.setdefault(table, set())
+        unknown = {k for k in row if k not in cols} - seen
+        if unknown:
+            seen |= unknown
+            rows = self._run("select column_name, data_type from information_schema.columns "
+                             "where table_name = %s and table_schema = current_schema()", (table,))
+            if rows:
+                cols = self._cols[table] = {r["column_name"]: r["data_type"] for r in rows}
         out = {}
         for k, v in row.items():
             if k not in cols:

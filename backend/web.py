@@ -6,7 +6,9 @@ POST /api/vaani/webhook      Vaani call_started / call_ended / call_postprocessi
 GET  /api/cron/digest        7pm digest (Vercel cron, Bearer CRON_SECRET)
 GET  /api/reask              designer's "I had to re-ask the basics" tick    (signed link)
 GET  /dashboard              Nikhil's dashboard                             (?token=DASHBOARD_TOKEN)
-GET  /dashboard/call         one call: checks, score, quotes, transcript
+GET  /dashboard/call         one call: checks, score, quotes, transcript, activity
+POST /dashboard/call/action  mark a follow-up done / reopen it / overturn a rejection (dashboard token)
+GET  /dashboard/export.csv   the period's calls as a spreadsheet
 POST /api/admin/migrate     create/update the Neon tables once (Bearer CRON_SECRET)
 GET  /api/health
 """
@@ -15,6 +17,7 @@ import json
 import os
 import traceback
 import urllib.parse
+from datetime import timedelta
 from http.cookies import SimpleCookie
 
 from . import actions, calcom, calendly, config, dashboard, digest, emails, vaani
@@ -65,6 +68,9 @@ def app(environ, start_response):
     store = get_store()
 
     try:
+        if path == "/favicon.ico":
+            return _resp(start_response, "200 OK", dashboard.FAVICON_SVG, "image/svg+xml")
+
         if path == "/api/health":
             return _resp(start_response, "200 OK", {"ok": True, "configured": configured()})
 
@@ -107,11 +113,25 @@ def app(environ, start_response):
             return _resp(start_response, "200 OK", "Thanks, noted. This feeds the dashboard so we can fix what the agent missed.",
                          "text/plain")
 
-        if path in ("/", "/dashboard", "/dashboard/call"):
+        if path in ("/", "/dashboard", "/dashboard/call", "/dashboard/call/action", "/dashboard/export.csv"):
+            if method == "POST":   # dashboard forms send the token in the body
+                query = {**query, **urllib.parse.parse_qs(raw.decode("utf-8", "replace"))}
             ok, cookies = _dashboard_allowed(environ, query)
             if not ok:
                 return _resp(start_response, "401 Unauthorized", "Add ?token=… to the URL.", "text/plain")
             token = (query.get("token") or [""])[0]
+            if path == "/dashboard/call/action":
+                if method != "POST":
+                    return _resp(start_response, "405 Method Not Allowed", "Use the buttons on the call page.", "text/plain")
+                call_id = (query.get("call_id") or [""])[0]
+                if not store.get_call(call_id):
+                    return _resp(start_response, "404 Not Found", "No such call.", "text/plain")
+                done = call_action(store, call_id, (query.get("action") or [""])[0],
+                                   (query.get("by") or [""])[0], (query.get("note") or [""])[0])
+                if not done:
+                    return _resp(start_response, "400 Bad Request", "Unknown action.", "text/plain")
+                back = dashboard._q("/dashboard/call", token, call_id=call_id)
+                return _resp(start_response, "303 See Other", "", "text/plain", [("Location", back), *cookies])
             if path == "/dashboard/call":
                 c = store.get_call((query.get("call_id") or [""])[0])
                 if not c:
@@ -122,8 +142,15 @@ def app(environ, start_response):
             if period not in ("1", "7", "30", "mtd"):
                 period = "30"
             days = None if period == "mtd" else int(period)
-            m = dashboard.compute_metrics(store.list_calls(), store.list_events("speech_guard_block"),
-                                          config.now_ist(), days)
+            calls, blocks, now = store.list_calls(), store.list_events("speech_guard_block"), config.now_ist()
+            m = dashboard.compute_metrics(calls, blocks, now, days)
+            if path == "/dashboard/export.csv":
+                name = f"aangan-calls-{m['start']:%Y%m%d}-{now:%Y%m%d}.csv"
+                return _resp(start_response, "200 OK", dashboard.render_csv(m["rows"], now), "text/csv",
+                             [("Content-Disposition", f'attachment; filename="{name}"'), *cookies])
+            # the same-length window just before this one, for "vs previous period"
+            prev_days = days or (now.date() - m["start"].date()).days + 1
+            m["prev"] = dashboard.compute_metrics(calls, blocks, m["start"] - timedelta(microseconds=1), prev_days)
             return _resp(start_response, "200 OK", dashboard.render_dashboard(m, period, token, dashboard.setup_gaps()),
                          "text/html", cookies)
 
@@ -131,6 +158,22 @@ def app(environ, start_response):
     except Exception as exc:  # noqa: BLE001
         store.log_event(None, "error", {"path": path, "error": str(exc)[:300], "trace": traceback.format_exc()[-1500:]})
         return _resp(start_response, "500 Internal Server Error", {"error": "internal error"})
+
+
+def call_action(store, call_id: str, action: str, by: str, note: str) -> bool:
+    """Dashboard buttons. done: follow-up handled · reopen: undo that · overturn: a rejected caller gets a callback."""
+    by, note = by.strip()[:80] or None, note.strip()[:500] or None
+    if action == "done":
+        store.update_call(call_id, {"handled_at": utcnow(), "handled_by": by, "handled_note": note})
+    elif action == "reopen":
+        store.update_call(call_id, {"handled_at": None, "handled_by": None, "handled_note": None})
+    elif action == "overturn":
+        store.update_call(call_id, {"overturned_at": utcnow(), "overturned_by": by,
+                                    "handled_at": None, "handled_by": None, "handled_note": None})
+    else:
+        return False
+    store.log_event(call_id, f"dashboard_{action}", {"by": by, "note": note})
+    return True
 
 
 def _fingerprint(secret: str) -> str | None:
@@ -190,6 +233,9 @@ def handle_vaani(store, body: dict) -> str:
     if ev["event"] == "call_postprocessing":
         store.upsert_call({**base, "duration_sec": ev["duration_sec"] or row.get("duration_sec"),
                            "started_at": row.get("started_at") or now})
+        if ev["recording_url"] or ev["summary"]:
+            store.update_call(call_id, {"recording_url": ev["recording_url"] or row.get("recording_url"),
+                                        "summary": ev["summary"] or row.get("summary")})
         if ev["recording_url"]:
             store.log_event(call_id, "recording", {"url": ev["recording_url"], "summary": ev["summary"]})
         # Already handled by the BYOL bridge, or a retry of this webhook: don't process twice.
