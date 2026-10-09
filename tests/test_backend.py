@@ -367,6 +367,17 @@ class OtherEndpoints(Base):
         self.assertIn("1 to 1.5 lakh", mail["text"])
         self.assertTrue(self.store.get_call("r1")["digest_sent_at"])
 
+    def test_digest_includes_last_nights_late_calls(self):
+        """A call after the 7pm run must appear in the next day's digest, not fall through the gap."""
+        now = config.now_ist().replace(hour=19, minute=0)
+        late = (now - timedelta(days=1)).replace(hour=21, minute=30)
+        self.store.upsert_call({"call_id": "late1", "started_at": late.isoformat(), "status": "not_qualified",
+                                "decision": "Not qualified", "reason_code": "OUT_OF_AREA", "caller_name": "Late caller"})
+        self.store.upsert_call({"call_id": "done1", "started_at": late.isoformat(), "status": "not_qualified",
+                                "decision": "Not qualified", "digest_sent_at": late.isoformat()})
+        rows, _ = digest.build(self.store, now)
+        self.assertEqual([r["call_id"] for r in rows], ["late1"])
+
     def test_dashboard_auth_and_render(self):
         now = config.now_ist()
         self.store.upsert_call({"call_id": "d1", "started_at": now.isoformat(), "answered_at": now.isoformat(),
@@ -379,8 +390,16 @@ class OtherEndpoints(Base):
         self.assertTrue(status.startswith("200"))
         self.assertIn("Consultations booked on the call", page)
         self.assertIn("COST_VAANI_INR_PER_MIN", page)        # missing rate is surfaced, not hidden
+        self.assertIn("Needs attention", page)
+        self.store.log_event("d1", "email_sent", {"to": ["designer@aangan.test"], "subject": "Report card for d1"})
         status, page = wsgi("GET", "/dashboard/call?call_id=d1&token=dash_test")
         self.assertTrue(status.startswith("200"))
+        self.assertIn("Report card for d1", page)            # activity log shows what happened after the call
+
+    def test_dashboard_empty_state(self):
+        status, page = wsgi("GET", "/dashboard?token=dash_test")
+        self.assertTrue(status.startswith("200"))
+        self.assertIn("No calls have come in yet", page)
 
     def test_cost_maths(self):
         c = {"duration_sec": 120, "usage": {"claude": {"model": "claude-opus-5-5", "input": 1_000_000, "output": 0,

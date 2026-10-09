@@ -14,12 +14,14 @@ def _ist_date(iso: str | None):
 
 
 def build(store, now: datetime | None = None):
+    """Every unbooked call not yet in a digest. Not just today's: a call at 9pm comes after today's 7pm run,
+    so it goes in tomorrow's. The 3-day window covers a missed cron run without resurfacing old history."""
     now = now or config.now_ist()
     today = now.date()
-    since = (now - timedelta(days=2)).astimezone(timezone.utc).isoformat(timespec="seconds")
+    since = (now - timedelta(days=3)).astimezone(timezone.utc).isoformat(timespec="seconds")
     calls = store.list_calls(since)
-    rows = [c for c in calls if _ist_date(c.get("started_at") or c.get("created_at")) == today
-            and c.get("status") in DIGEST_STATUSES and not c.get("digest_sent_at")]
+    rows = [c for c in calls if c.get("status") in DIGEST_STATUSES and not c.get("digest_sent_at")
+            and (_ist_date(c.get("started_at") or c.get("created_at")) or today) <= today]
     follow_ups = [c for c in store.list_calls() if c.get("status") == "nurture" and c.get("follow_up_on")
                   and c["follow_up_on"] <= today.isoformat()]
     return rows, follow_ups

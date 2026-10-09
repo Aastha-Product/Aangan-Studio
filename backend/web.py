@@ -111,18 +111,21 @@ def app(environ, start_response):
             ok, cookies = _dashboard_allowed(environ, query)
             if not ok:
                 return _resp(start_response, "401 Unauthorized", "Add ?token=… to the URL.", "text/plain")
+            token = (query.get("token") or [""])[0]
             if path == "/dashboard/call":
                 c = store.get_call((query.get("call_id") or [""])[0])
                 if not c:
                     return _resp(start_response, "404 Not Found", "No such call.", "text/plain")
-                return _resp(start_response, "200 OK", dashboard.render_call(c), "text/html", cookies)
+                return _resp(start_response, "200 OK", dashboard.render_call(c, store.list_call_events(c["call_id"]), token),
+                             "text/html", cookies)
             period = (query.get("period") or ["30"])[0]
-            days = None if period == "mtd" else int(period) if period.isdigit() else 30
-            since = None
-            m = dashboard.compute_metrics(store.list_calls(since), store.list_events("speech_guard_block"),
+            if period not in ("1", "7", "30", "mtd"):
+                period = "30"
+            days = None if period == "mtd" else int(period)
+            m = dashboard.compute_metrics(store.list_calls(), store.list_events("speech_guard_block"),
                                           config.now_ist(), days)
-            return _resp(start_response, "200 OK",
-                         dashboard.render_dashboard(m, period, (query.get("token") or [""])[0]), "text/html", cookies)
+            return _resp(start_response, "200 OK", dashboard.render_dashboard(m, period, token, dashboard.setup_gaps()),
+                         "text/html", cookies)
 
         return _resp(start_response, "404 Not Found", {"error": "not found", "path": path})
     except Exception as exc:  # noqa: BLE001

@@ -66,6 +66,10 @@ class SupabaseStore:
             q += f"&created_at=gte.{urllib.parse.quote(since_iso)}"
         return request_json("GET", f"{self.url}/call_events?{q}", self._h()) or []
 
+    def list_call_events(self, call_id: str) -> list[dict]:
+        q = f"select=*&call_id=eq.{urllib.parse.quote(call_id)}&order=created_at.asc"
+        return request_json("GET", f"{self.url}/call_events?{q}", self._h()) or []
+
 
 class LocalStore:
     """Same interface, kept in memory and optionally mirrored to a JSON file."""
@@ -119,6 +123,9 @@ class LocalStore:
     def list_events(self, kind=None, since_iso=None):
         return [e for e in self.events
                 if (not kind or e["kind"] == kind) and (not since_iso or e["created_at"] >= since_iso)]
+
+    def list_call_events(self, call_id):
+        return [copy.deepcopy(e) for e in self.events if e.get("call_id") == call_id]
 
 
 class PostgresStore:
@@ -216,6 +223,9 @@ class PostgresStore:
             where.append("created_at >= %s"); params.append(since_iso)
         clause = f" where {' and '.join(where)}" if where else ""
         return self._run(f"select * from call_events{clause} order by created_at", tuple(params))
+
+    def list_call_events(self, call_id):
+        return self._run("select * from call_events where call_id = %s order by created_at", (call_id,))
 
 
 def _from_db(row: dict) -> dict:

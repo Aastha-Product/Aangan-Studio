@@ -62,6 +62,7 @@ FRONT_DESK_EMAIL = env("FRONT_DESK_EMAIL") or STUDIO_HEAD_ALERT_EMAIL
 HUBSPOT_TOKEN = env("HUBSPOT_ACCESS_TOKEN")
 HUBSPOT_PIPELINE = env("HUBSPOT_PIPELINE_ID", "default")
 HUBSPOT_STAGE_BOOKED = env("HUBSPOT_DEAL_STAGE_CONSULTATION_BOOKED")  # stage id for "Consultation booked"
+HUBSPOT_PORTAL_ID = env("HUBSPOT_PORTAL_ID")      # optional; turns deal ids on the dashboard into links
 
 # --- Database: Neon/Postgres (DATABASE_URL, injected by Vercel Storage) or Supabase ---
 DATABASE_URL = env("DATABASE_URL") or env("POSTGRES_URL")
