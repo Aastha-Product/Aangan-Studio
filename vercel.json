@@ -2,7 +2,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 60,
-      "includeFiles": "{backend,qualify,prompts,context}/**"
+      "includeFiles": "{backend,qualify,prompts,context,db}/**"
     }
   },
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],

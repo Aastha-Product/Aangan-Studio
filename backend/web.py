@@ -7,6 +7,7 @@ GET  /api/cron/digest        7pm digest (Vercel cron, Bearer CRON_SECRET)
 GET  /api/reask              designer's "I had to re-ask the basics" tick    (signed link)
 GET  /dashboard              Nikhil's dashboard                             (?token=DASHBOARD_TOKEN)
 GET  /dashboard/call         one call: checks, score, quotes, transcript
+POST /api/admin/migrate     create/update the Neon tables once (Bearer CRON_SECRET)
 GET  /api/health
 """
 import hmac
@@ -82,6 +83,13 @@ def app(environ, start_response):
             body = json.loads(raw or b"{}")
             return _resp(start_response, "200 OK", {"ok": True, "result": handle_vaani(store, body)})
 
+        if path == "/api/admin/migrate" and method == "POST":
+            # One-off DB setup on Vercel (Neon's DATABASE_URL never has to leave Vercel). Same secret as the cron.
+            auth = environ.get("HTTP_AUTHORIZATION", "")
+            if not config.CRON_SECRET or not hmac.compare_digest(auth, f"Bearer {config.CRON_SECRET}"):
+                return _resp(start_response, "401 Unauthorized", {"error": "unauthorised"})
+            return _resp(start_response, "200 OK", migrate())
+
         if path == "/api/cron/digest":
             auth = environ.get("HTTP_AUTHORIZATION", "")
             if not config.CRON_SECRET or not hmac.compare_digest(auth, f"Bearer {config.CRON_SECRET}"):
@@ -117,6 +125,18 @@ def app(environ, start_response):
     except Exception as exc:  # noqa: BLE001
         store.log_event(None, "error", {"path": path, "error": str(exc)[:300], "trace": traceback.format_exc()[-1500:]})
         return _resp(start_response, "500 Internal Server Error", {"error": "internal error"})
+
+
+def migrate() -> dict:
+    """Apply db/schema.sql to DATABASE_URL (idempotent) and report table sizes."""
+    if not config.DATABASE_URL:
+        return {"ok": False, "error": "DATABASE_URL is not set: connect the Neon database in Vercel → Storage"}
+    import psycopg
+    sql = (config.ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
+    with psycopg.connect(config.DATABASE_URL, autocommit=True, connect_timeout=15) as conn:
+        conn.execute(sql)
+        counts = {t: conn.execute(f"select count(*) from {t}").fetchone()[0] for t in ("calls", "call_events")}
+    return {"ok": True, "tables": counts}
 
 
 def handle_vaani(store, body: dict) -> str:

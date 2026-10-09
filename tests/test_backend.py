@@ -325,6 +325,12 @@ class OtherEndpoints(Base):
         self.assertTrue(row["flags"][0].startswith("⚠ AGENT SPOKE A PRICE"))
         self.assertTrue(any("spoke a price" in e["subject"] and e["to"] == ["nikhil@aangan.test"] for e in self.http.emails()))
 
+    def test_migrate_endpoint_needs_secret(self):
+        self.assertTrue(wsgi("POST", "/api/admin/migrate")[0].startswith("401"))
+        with mock.patch.object(config, "DATABASE_URL", ""):
+            status, out = wsgi("POST", "/api/admin/migrate", headers={"HTTP_AUTHORIZATION": "Bearer cron_test"})
+        self.assertIn("DATABASE_URL is not set", out)
+
     def test_reask_link(self):
         self.store.upsert_call({"call_id": "c5"})
         from backend.emails import reask_sig
