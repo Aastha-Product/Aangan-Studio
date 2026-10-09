@@ -14,3 +14,6 @@ node_modules/
 # local data: call logs, Vaani config backups, Gemini extraction cache, demo data
 out/*
 !out/acceptance_report.md
+
+# build artefacts
+*.zip
