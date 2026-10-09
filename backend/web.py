@@ -66,7 +66,7 @@ def app(environ, start_response):
 
     try:
         if path == "/api/health":
-            return _resp(start_response, "200 OK", {"ok": True})
+            return _resp(start_response, "200 OK", {"ok": True, "configured": configured()})
 
         if path == "/api/calendly/webhook" and method == "POST":
             if not calendly.verify_signature(raw, environ.get("HTTP_CALENDLY_WEBHOOK_SIGNATURE")):
@@ -128,6 +128,24 @@ def app(environ, start_response):
     except Exception as exc:  # noqa: BLE001
         store.log_event(None, "error", {"path": path, "error": str(exc)[:300], "trace": traceback.format_exc()[-1500:]})
         return _resp(start_response, "500 Internal Server Error", {"error": "internal error"})
+
+
+def _fingerprint(secret: str) -> str | None:
+    """First 6 hex chars of sha256 — lets you check Vercel holds the same secret as .env without revealing it."""
+    import hashlib
+    return hashlib.sha256(secret.encode()).hexdigest()[:6] if secret else None
+
+
+def configured() -> dict:
+    """Which settings this deployment has (yes/no only; secrets as fingerprints). Never returns values."""
+    return {
+        "database": bool(config.DATABASE_URL), "public_base_url": config.PUBLIC_BASE_URL or None,
+        "dashboard_token": _fingerprint(config.DASHBOARD_TOKEN), "cron_secret": _fingerprint(config.CRON_SECRET),
+        "app_secret": bool(config.APP_SECRET), "gemini": bool(config.env("GEMINI_API_KEY")),
+        "resend": bool(config.RESEND_API_KEY), "hubspot": bool(config.HUBSPOT_TOKEN),
+        "booking_provider": config.BOOKING_PROVIDER, "calcom": bool(config.CALCOM_API_KEY),
+        "calcom_event_type": bool(config.CALCOM_EVENT_TYPE_ID), "vaani_webhook": bool(config.VAANI_WEBHOOK_SECRET),
+    }
 
 
 def migrate() -> dict:
