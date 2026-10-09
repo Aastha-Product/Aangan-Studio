@@ -331,6 +331,18 @@ class OtherEndpoints(Base):
             status, out = wsgi("POST", "/api/admin/migrate", headers={"HTTP_AUTHORIZATION": "Bearer cron_test"})
         self.assertIn("DATABASE_URL is not set", out)
 
+    def test_vercel_rewrite_paths(self):
+        """Vercel delivers every request as /api/index?__path=<original> (vercel.json rewrite)."""
+        def vercel(path_and_query, method="GET", headers=None):
+            return wsgi(method, "/api/index?" + path_and_query, headers=headers)
+        self.assertTrue(vercel("__path=/api/health")[0].startswith("200"))
+        self.assertTrue(vercel("__path=/dashboard")[0].startswith("401"))
+        self.assertTrue(vercel("__path=/dashboard&token=dash_test")[0].startswith("200"))
+        self.assertTrue(vercel("__path=/&token=dash_test")[0].startswith("200"))
+        self.assertTrue(vercel("__path=/api/cron/digest", headers={"HTTP_AUTHORIZATION": "Bearer cron_test"})[0].startswith("200"))
+        status, out = vercel("__path=/nope")
+        self.assertIn('"path": "/nope"', out)
+
     def test_reask_link(self):
         self.store.upsert_call({"call_id": "c5"})
         from backend.emails import reask_sig

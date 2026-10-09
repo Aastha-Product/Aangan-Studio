@@ -5,6 +5,6 @@
       "includeFiles": "{backend,qualify,prompts,context,db}/**"
     }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/index?__path=/$1" }],
   "crons": [{ "path": "/api/cron/digest", "schedule": "30 13 * * *" }]
 }

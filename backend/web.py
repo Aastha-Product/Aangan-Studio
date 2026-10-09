@@ -52,8 +52,11 @@ def _dashboard_allowed(environ, query) -> tuple[bool, list]:
 
 def app(environ, start_response):
     method = environ.get("REQUEST_METHOD", "GET")
-    path = environ.get("PATH_INFO", "/").rstrip("/") or "/"
     query = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
+    # On Vercel every route is rewritten to /api/index, which hides the requested path; vercel.json passes
+    # the original as ?__path=… . Locally (dev server, tests) PATH_INFO already holds it.
+    raw_path = (query.pop("__path", [None])[0]) or environ.get("PATH_INFO", "/")
+    path = "/" + raw_path.strip("/") if raw_path.strip("/") else "/"
     try:
         length = int(environ.get("CONTENT_LENGTH") or 0)
     except ValueError:
@@ -121,7 +124,7 @@ def app(environ, start_response):
             return _resp(start_response, "200 OK",
                          dashboard.render_dashboard(m, period, (query.get("token") or [""])[0]), "text/html", cookies)
 
-        return _resp(start_response, "404 Not Found", {"error": "not found"})
+        return _resp(start_response, "404 Not Found", {"error": "not found", "path": path})
     except Exception as exc:  # noqa: BLE001
         store.log_event(None, "error", {"path": path, "error": str(exc)[:300], "trace": traceback.format_exc()[-1500:]})
         return _resp(start_response, "500 Internal Server Error", {"error": "internal error"})
