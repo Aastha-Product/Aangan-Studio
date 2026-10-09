@@ -12,8 +12,18 @@ from . import config
 from .http import request_json
 
 
+TEST_PREFIX = "E2E-TEST"   # calls made by the live end-to-end test; ignored by the setup checks
+
+
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _event_matches(e: dict, kind: str, since_iso, subject_prefix) -> bool:
+    p = e.get("payload") or {}
+    return (e.get("kind") == kind and not str(e.get("call_id") or "").startswith(TEST_PREFIX)
+            and (not since_iso or str(e.get("created_at") or "") >= since_iso)
+            and (not subject_prefix or str(p.get("subject") or "").startswith(subject_prefix)))
 
 
 class SupabaseStore:
@@ -69,6 +79,10 @@ class SupabaseStore:
     def list_call_events(self, call_id: str) -> list[dict]:
         q = f"select=*&call_id=eq.{urllib.parse.quote(call_id)}&order=created_at.asc"
         return request_json("GET", f"{self.url}/call_events?{q}", self._h()) or []
+
+    def event_stats(self, kind, since_iso=None, subject_prefix=None) -> tuple[int, str | None]:
+        hits = [e for e in self.list_events(kind, since_iso) if _event_matches(e, kind, since_iso, subject_prefix)]
+        return len(hits), max((e["created_at"] for e in hits), default=None)
 
 
 class LocalStore:
@@ -126,6 +140,10 @@ class LocalStore:
 
     def list_call_events(self, call_id):
         return [copy.deepcopy(e) for e in self.events if e.get("call_id") == call_id]
+
+    def event_stats(self, kind, since_iso=None, subject_prefix=None):
+        hits = [e for e in self.events if _event_matches(e, kind, since_iso, subject_prefix)]
+        return len(hits), max((e["created_at"] for e in hits), default=None)
 
 
 class PostgresStore:
@@ -236,6 +254,20 @@ class PostgresStore:
 
     def list_call_events(self, call_id):
         return self._run("select * from call_events where call_id = %s order by created_at", (call_id,))
+
+    def event_stats(self, kind, since_iso=None, subject_prefix=None):
+        """(count, latest created_at) for one kind of event, without loading payloads."""
+        sql = ("select count(*) as n, max(created_at) as t from call_events "
+               "where kind = %s and coalesce(call_id, '') not like %s")
+        params = [kind, TEST_PREFIX + "%"]
+        if since_iso:
+            sql += " and created_at >= %s"
+            params.append(since_iso)
+        if subject_prefix:
+            sql += " and payload->>'subject' like %s"
+            params.append(subject_prefix.replace("%", r"\%") + "%")
+        r = self._run(sql, tuple(params), "one") or {}
+        return int(r.get("n") or 0), r.get("t")
 
 
 def _from_db(row: dict) -> dict:

@@ -113,7 +113,8 @@ def app(environ, start_response):
             return _resp(start_response, "200 OK", "Thanks, noted. This feeds the dashboard so we can fix what the agent missed.",
                          "text/plain")
 
-        if path in ("/", "/dashboard", "/dashboard/call", "/dashboard/call/action", "/dashboard/export.csv"):
+        if path in ("/", "/dashboard", "/dashboard/calls", "/dashboard/reports", "/dashboard/setup",
+                    "/dashboard/call", "/dashboard/call/action", "/dashboard/export.csv"):
             if method == "POST":   # dashboard forms send the token in the body
                 query = {**query, **urllib.parse.parse_qs(raw.decode("utf-8", "replace"))}
             ok, cookies = _dashboard_allowed(environ, query)
@@ -130,13 +131,22 @@ def app(environ, start_response):
                                    (query.get("by") or [""])[0], (query.get("note") or [""])[0])
                 if not done:
                     return _resp(start_response, "400 Bad Request", "Unknown action.", "text/plain")
-                back = dashboard._q("/dashboard/call", token, call_id=call_id)
+                back = (query.get("back") or [""])[0]
+                if not back.startswith("/dashboard"):     # only ever redirect within the dashboard
+                    back = dashboard._q("/dashboard/call", token, call_id=call_id)
+                back += ("&" if "?" in back else "?") + "msg=" + (query.get("action") or [""])[0]
                 return _resp(start_response, "303 See Other", "", "text/plain", [("Location", back), *cookies])
+            flash = (query.get("msg") or [None])[0]
             if path == "/dashboard/call":
                 c = store.get_call((query.get("call_id") or [""])[0])
                 if not c:
                     return _resp(start_response, "404 Not Found", "No such call.", "text/plain")
-                return _resp(start_response, "200 OK", dashboard.render_call(c, store.list_call_events(c["call_id"]), token),
+                return _resp(start_response, "200 OK",
+                             dashboard.render_call(c, store.list_call_events(c["call_id"]), token, flash), "text/html", cookies)
+            if path == "/dashboard/setup":
+                calls, now = store.list_calls(), config.now_ist()
+                todo = len(dashboard.compute_metrics(calls, [], now, 7)["attention"])
+                return _resp(start_response, "200 OK", dashboard.render_setup(dashboard.setup_status(store), token, todo),
                              "text/html", cookies)
             period = (query.get("period") or ["30"])[0]
             if period not in ("1", "7", "30", "mtd"):
@@ -151,8 +161,15 @@ def app(environ, start_response):
             # the same-length window just before this one, for "vs previous period"
             prev_days = days or (now.date() - m["start"].date()).days + 1
             m["prev"] = dashboard.compute_metrics(calls, blocks, m["start"] - timedelta(microseconds=1), prev_days)
-            return _resp(start_response, "200 OK", dashboard.render_dashboard(m, period, token, dashboard.setup_gaps()),
-                         "text/html", cookies)
+            setup = dashboard.setup_status(store)
+            setup_open = any(s["state"] != "ok" for s in setup)
+            if path == "/dashboard/calls":
+                page = dashboard.render_calls(m, period, token, (query.get("group") or ["all"])[0], setup_open)
+            elif path == "/dashboard/reports":
+                page = dashboard.render_reports(m, period, token, setup_open)
+            else:
+                page = dashboard.render_home(m, period, token, setup, flash)
+            return _resp(start_response, "200 OK", page, "text/html", cookies)
 
         return _resp(start_response, "404 Not Found", {"error": "not found", "path": path})
     except Exception as exc:  # noqa: BLE001

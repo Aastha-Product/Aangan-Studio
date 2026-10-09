@@ -388,9 +388,15 @@ class OtherEndpoints(Base):
         self.assertTrue(wsgi("GET", "/dashboard")[0].startswith("401"))
         status, page = wsgi("GET", "/dashboard?token=dash_test")
         self.assertTrue(status.startswith("200"))
-        self.assertIn("Consultations booked on the call", page)
-        self.assertIn("COST_VAANI_INR_PER_MIN", page)        # missing rate is surfaced, not hidden
-        self.assertIn("Needs attention", page)
+        self.assertIn("Consultations booked", page)
+        self.assertIn("Your to-do list", page)
+        for tab in ("calls", "reports", "setup"):
+            status, sub = wsgi("GET", f"/dashboard/{tab}?token=dash_test")
+            self.assertTrue(status.startswith("200"), tab)
+        self.assertIn("Cost per call", wsgi("GET", "/dashboard/reports?token=dash_test")[1])
+        setup = wsgi("GET", "/dashboard/setup?token=dash_test")[1]
+        self.assertIn("COST_VAANI_INR_PER_MIN", setup)       # missing rate is surfaced, not hidden
+        self.assertIn("Phone line", setup)
         self.store.log_event("d1", "email_sent", {"to": ["designer@aangan.test"], "subject": "Report card for d1"})
         status, page = wsgi("GET", "/dashboard/call?call_id=d1&token=dash_test")
         self.assertTrue(status.startswith("200"))
@@ -403,7 +409,8 @@ class OtherEndpoints(Base):
         self.store.upsert_call({"call_id": "n1", "started_at": now.isoformat(), "decision": "Not qualified",
                                 "status": "not_qualified", "reason_code": "OUT_OF_AREA", "caller_name": "Nashik caller"})
         page = wsgi("GET", "/dashboard?token=dash_test")[1]
-        self.assertIn("Pending caller", page.split("Needs attention")[1].split("Why calls")[0])
+        todo = lambda page: page.split("Your to-do list")[1].split("Latest calls")[0]  # noqa: E731
+        self.assertIn("Pending caller", todo(page))
 
         def post(body):
             return wsgi("POST", "/dashboard/call/action", body=body.encode(),
@@ -411,9 +418,11 @@ class OtherEndpoints(Base):
         self.assertTrue(post("call_id=p1&action=done")[0].startswith("401"))       # no token, no change
         self.assertTrue(post("call_id=p1&action=done&token=dash_test&by=Front+desk&note=Booked+Tue")[0].startswith("303"))
         self.assertEqual(self.store.get_call("p1")["handled_by"], "Front desk")
-        page = wsgi("GET", "/dashboard?token=dash_test")[1]
-        self.assertNotIn("Pending caller", page.split("Needs attention")[1].split("Why calls")[0])
-        post("call_id=p1&action=reopen&token=dash_test")
+        page = wsgi("GET", "/dashboard?token=dash_test&msg=done")[1]
+        self.assertNotIn("Pending caller", todo(page))
+        self.assertIn("Marked as done", page)                 # confirmation toast
+        status = post("call_id=p1&action=reopen&token=dash_test&back=https://evil.example/")[0]
+        self.assertTrue(status.startswith("303"))
         self.assertIsNone(self.store.get_call("p1")["handled_at"])
 
         post("call_id=n1&action=overturn&token=dash_test&by=Riya")
@@ -434,7 +443,7 @@ class OtherEndpoints(Base):
     def test_dashboard_empty_state(self):
         status, page = wsgi("GET", "/dashboard?token=dash_test")
         self.assertTrue(status.startswith("200"))
-        self.assertIn("No calls have come in yet", page)
+        self.assertIn("No calls yet", page)
 
     def test_cost_maths(self):
         c = {"duration_sec": 120, "usage": {"claude": {"model": "claude-opus-5-5", "input": 1_000_000, "output": 0,
