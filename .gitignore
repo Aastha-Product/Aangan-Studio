@@ -17,3 +17,4 @@ out/*
 
 # build artefacts
 *.zip
+.neon
