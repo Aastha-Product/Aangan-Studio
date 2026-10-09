@@ -628,8 +628,10 @@ details.more summary{cursor:pointer;font-size:14px;font-weight:600;color:var(--t
 .msg.caller{align-self:flex-end;background:var(--seq-track);border-bottom-right-radius:4px}
 .footer{color:var(--muted);font-size:12.5px;margin-top:32px;text-align:center}
 @media (max-width:900px){.grid2{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.funnel{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:960px){.topbar .wrap{gap:4px 12px;padding-top:8px}.tabs{order:3;flex-basis:100%;min-height:44px}
+ .seg{margin-left:auto}}
 @media (max-width:640px){
- .topbar{position:static}.topbar .wrap{gap:4px 12px;padding-top:8px}.tabs{order:3;flex-basis:100%;min-height:44px}
+ .topbar{position:static}
  .brand small{display:none}h1{font-size:22px}.headline{font-size:15px}
  .stat .num{font-size:28px}.card{padding:16px;border-radius:14px}
  a.item{grid-template-columns:36px 1fr;gap:10px}.avatar{width:36px;height:36px;font-size:13px}
@@ -925,7 +927,7 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
 
     after = f" ({m['after_hours']} after hours)" if m["after_hours"] else ""
     headline = (f"{plabel[:1].upper() + plabel[1:]}, the agent answered <b>{_plural(m['answered'], 'call')}</b>{after} "
-                f"and booked <b>{_plural(m['booked_on_call'], 'consultation')}</b>.")
+                f"and <b>{_plural(m['booked_any'], 'consultation')}</b> {'was' if m['booked_any'] == 1 else 'were'} booked.")
     if urgent:
         headline += f" <span class='urgent'>{_plural(urgent, 'caller')} need{'s' if urgent == 1 else ''} a call back.</span>"
     elif todo:
@@ -940,7 +942,8 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
         for grp, key, label, num, note in (
             ("all", "", "Calls answered", m["answered"], _delta(m["answered"], prev and prev["answered"], vs=vs) or e(f"{m['after_hours']} after hours")),
             ("booked", f"<span class='key' style='background:{GROUP_COLOR['booked']}'></span>", "Consultations booked",
-             m["booked_on_call"], _delta(m["booked_on_call"], prev and prev["booked_on_call"], vs=vs) or "booked on the call"),
+             m["booked_any"], _delta(m["booked_any"], prev and prev["booked_any"], vs=vs)
+             or e(f"{m['booked_on_call']} booked during the call itself")),
             ("follow_up", f"<span class='key' style='background:{GROUP_COLOR['follow_up']}'></span>", "Need a follow-up",
              g["follow_up"], e(GROUP_HINT["follow_up"])),
             ("closed", f"<span class='key' style='background:{GROUP_COLOR['closed']}'></span>", "Closed", g["closed"],
@@ -1068,8 +1071,8 @@ def render_reports(m: dict, period: str, token: str, setup_open: bool = False) -
         _tile("Cost per booked consultation", _fmt_inr(m["cost_per_booking_inr"]), "running cost ÷ bookings"),
     ])
     body = (f"<div class='pagehead'><div><h1>Reports</h1><p class='headline'>How the agent is doing {plabel}: "
-            f"<b>{_plural(m['booked_on_call'], 'consultation')}</b> booked on the call "
-            f"{_delta(m['booked_on_call'], prev and prev['booked_on_call'], vs=vs)}</p></div>"
+            f"<b>{_plural(m['booked_any'], 'consultation')}</b> booked, {m['booked_on_call']} of them during the call "
+            f"{_delta(m['booked_any'], prev and prev['booked_any'], vs=vs)}</p></div>"
             f"<a class='btn' href='{e(_q('/dashboard/export.csv', token, period=period))}'>{_icon('download')}Download spreadsheet</a></div>"
             f"<div class='card'><div class='cardhead'><h2>Where the calls went</h2></div><div class='funnel'>{funnel}</div></div>"
             f"<div class='grid2'>{chart}{reasons}</div>"
