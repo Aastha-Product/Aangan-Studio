@@ -1579,7 +1579,7 @@ def render_call(c: dict, events: list[dict] | None = None, token: str = "", flas
     if c.get("recording_url"):
         acts.append(f"<a class='btn' href='{e(c['recording_url'])}' target='_blank' rel='noopener'>{_icon('play')}Listen</a>")
     if c.get("hubspot_deal_id") and config.HUBSPOT_PORTAL_ID:
-        acts.append(f"<a class='btn' href='https://app.hubspot.com/contacts/{e(config.HUBSPOT_PORTAL_ID)}/record/0-3/"
+        acts.append(f"<a class='btn' href='https://{e(config.HUBSPOT_UI_DOMAIN)}/contacts/{e(config.HUBSPOT_PORTAL_ID)}/record/0-3/"
                     f"{e(str(c['hubspot_deal_id']))}' target='_blank' rel='noopener'>{_icon('ext')}HubSpot</a>")
     if c.get("reschedule_url") and c.get("status") == "booked":
         acts.append(f"<a class='btn' href='{e(c['reschedule_url'])}' target='_blank' rel='noopener'>{_icon('ext')}Reschedule</a>")
@@ -1634,6 +1634,6 @@ def _hubspot(deal_id):
     if not deal_id:
         return "—"
     if config.HUBSPOT_PORTAL_ID:
-        url = f"https://app.hubspot.com/contacts/{config.HUBSPOT_PORTAL_ID}/record/0-3/{deal_id}"
+        url = f"https://{config.HUBSPOT_UI_DOMAIN}/contacts/{config.HUBSPOT_PORTAL_ID}/record/0-3/{deal_id}"
         return f"<a href='{e(url)}' target='_blank' rel='noopener'>Open deal {e(str(deal_id))}</a>"
     return e(f"Deal {deal_id}")

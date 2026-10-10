@@ -63,6 +63,7 @@ HUBSPOT_TOKEN = env("HUBSPOT_ACCESS_TOKEN")
 HUBSPOT_PIPELINE = env("HUBSPOT_PIPELINE_ID", "default")
 HUBSPOT_STAGE_BOOKED = env("HUBSPOT_DEAL_STAGE_CONSULTATION_BOOKED")  # stage id for "Consultation booked"
 HUBSPOT_PORTAL_ID = env("HUBSPOT_PORTAL_ID")      # optional; turns deal ids on the dashboard into links
+HUBSPOT_UI_DOMAIN = env("HUBSPOT_UI_DOMAIN", "app.hubspot.com")   # e.g. app-na2.hubspot.com for a US (na2) account
 
 # --- Database: Neon/Postgres (DATABASE_URL, injected by Vercel Storage) or Supabase ---
 DATABASE_URL = env("DATABASE_URL") or env("POSTGRES_URL")
