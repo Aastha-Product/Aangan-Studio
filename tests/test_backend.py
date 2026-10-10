@@ -442,6 +442,34 @@ class OtherEndpoints(Base):
         self.assertIn("Outside Pune / PCMC", out)
         self.assertTrue(wsgi("GET", "/dashboard/export.csv")[0].startswith("401"))
 
+    def test_sign_in_page_instead_of_token_error(self):
+        def raw(method, path, body=b"", headers=None):
+            environ = {"REQUEST_METHOD": method, "PATH_INFO": path.split("?")[0],
+                       "QUERY_STRING": path.split("?", 1)[1] if "?" in path else "",
+                       "CONTENT_LENGTH": str(len(body)), "wsgi.input": io.BytesIO(body), **(headers or {})}
+            out = {}
+            data = b"".join(web.app(environ, lambda s, h: out.update(status=s, headers=dict(h))))
+            return out["status"], out["headers"], data.decode()
+
+        status, _, page = raw("GET", "/dashboard/calls?group=booked")
+        self.assertTrue(status.startswith("401"))
+        self.assertIn("Access code", page)
+        self.assertIn('value="/dashboard/calls?group=booked"', page)        # comes back to the page asked for
+        form = {"CONTENT_TYPE": "application/x-www-form-urlencoded"}
+        status, h, page = raw("POST", "/dashboard/login", b"code=nope&next=%2Fdashboard%2Fcalls", form)
+        self.assertTrue(status.startswith("401"))
+        self.assertIn("didn't work", page)
+        self.assertNotIn("Set-Cookie", h)
+        status, h, _ = raw("POST", "/dashboard/login", b"code=dash_test&next=%2Fdashboard%2Fcalls%3Fgroup%3Dbooked", form)
+        self.assertTrue(status.startswith("303"))
+        self.assertEqual(h["Location"], "/dashboard/calls?group=booked")
+        self.assertIn("dash_token=dash_test", h["Set-Cookie"])
+        self.assertIn("HttpOnly", h["Set-Cookie"])
+        status, h, _ = raw("POST", "/dashboard/login", b"code=dash_test&next=https%3A%2F%2Fevil.example", form)
+        self.assertEqual(h["Location"], "/dashboard")                       # never sent off the dashboard
+        status, _, page = raw("GET", "/dashboard/calls", headers={"HTTP_COOKIE": "dash_token=dash_test"})
+        self.assertTrue(status.startswith("200"))                           # the cookie alone opens every page
+
     def test_dashboard_empty_state(self):
         status, page = wsgi("GET", "/dashboard?token=dash_test")
         self.assertTrue(status.startswith("200"))

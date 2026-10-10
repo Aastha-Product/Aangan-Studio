@@ -765,6 +765,38 @@ def _page(title: str, body: str, token: str, active: str | None = None, period: 
 </div></main>{toast}<script>{JS}</script></body></html>"""
 
 
+LOGIN_CSS = """
+.login{min-height:100vh;display:grid;place-items:center;padding:24px 16px}
+.login .card{width:100%;max-width:400px;padding:28px}
+.login .brand{margin-bottom:22px}
+.login label{display:block;font-size:14px;font-weight:600;margin:16px 0 6px}
+.login input[type=password]{width:100%;border:1px solid var(--border);background:var(--surface-1);color:var(--text-primary);
+border-radius:10px;padding:11px 12px;font:inherit;font-size:15px}
+.login .btn{width:100%;margin-top:14px;min-height:44px}
+.login .err{background:var(--critical-bg);color:var(--critical-text);border-radius:10px;padding:9px 12px;font-size:14px;margin-top:14px}
+.login .hint{color:var(--muted);font-size:13px;margin-top:14px;line-height:1.5}
+"""
+
+
+def render_login(next_path: str = "/dashboard", error: bool = False) -> str:
+    """Sign-in page shown instead of the dashboard to a browser that hasn't entered the access code."""
+    err = ("<div class='err' role='alert'>That code didn't work. Check it and try again.</div>" if error else "")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<link rel="icon" href="{FAVICON}"><title>Sign in · Aangan</title><style>{CSS}{LOGIN_CSS}</style></head>
+<body class="viz-root"><main class="login"><div class="card">
+<div class="brand"><span class="mark">A</span><span><b>Aangan Studio</b><small>Phone enquiries dashboard</small></span></div>
+<h1 style="font-size:22px">Sign in</h1>
+<p class="sub" style="margin-top:6px">Enter the studio's access code to see calls, bookings and reports.</p>
+<form method="post" action="/dashboard/login">
+<input type="hidden" name="next" value="{e(next_path)}">
+<label for="code">Access code</label>
+<input id="code" name="code" type="password" autocomplete="current-password" required autofocus>
+{err}<button class="btn primary" type="submit">Open dashboard</button></form>
+<p class="hint">This browser will remember you for 30 days. Don't have the code? Ask Aastha in the founder's office.</p>
+</div></main></body></html>"""
+
+
 def _delta(cur, prev, good_when_up=True, unit="", vs="previous period"):
     """'▲ 4 vs previous 30 days'. Colour = direction × whether up is good; always with an arrow and a word."""
     if cur is None or prev is None:

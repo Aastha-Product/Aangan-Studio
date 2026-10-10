@@ -5,7 +5,8 @@ POST /api/calcom/webhook     Cal.com BOOKING_CREATED / RESCHEDULED / CANCELLED /
 POST /api/vaani/webhook      Vaani call_started / call_ended / call_postprocessing (?key= verified)
 GET  /api/cron/digest        7pm digest (Vercel cron, Bearer CRON_SECRET)
 GET  /api/reask              designer's "I had to re-ask the basics" tick    (signed link)
-GET  /dashboard              Nikhil's dashboard                             (?token=DASHBOARD_TOKEN)
+GET  /dashboard              Nikhil's dashboard (?token=DASHBOARD_TOKEN once, or the sign-in page; then a 30-day cookie)
+GET/POST /dashboard/login    access-code sign-in
 GET  /dashboard/call         one call: checks, score, quotes, transcript, activity
 POST /dashboard/call/action  mark a follow-up done / reopen it / overturn a rejection (dashboard token)
 GET  /dashboard/export.csv   the period's calls as a spreadsheet
@@ -49,8 +50,24 @@ def _dashboard_allowed(environ, query) -> tuple[bool, list]:
     given = (query.get("token") or [""])[0]
     cookie = SimpleCookie(environ.get("HTTP_COOKIE", "")).get("dash_token")
     if given and hmac.compare_digest(given, token):
-        return True, [("Set-Cookie", f"dash_token={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000")]
+        return True, [_auth_cookie()]
     return bool(cookie and hmac.compare_digest(cookie.value, token)), []
+
+
+def _auth_cookie() -> tuple[str, str]:
+    """The browser remembers the dashboard for 30 days (HttpOnly: page scripts can't read it)."""
+    return ("Set-Cookie", f"dash_token={config.DASHBOARD_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000")
+
+
+def _safe_next(nxt: str) -> str:
+    """Only ever send people back into the dashboard after signing in."""
+    return nxt if nxt.startswith("/dashboard") and not nxt.startswith("//") else "/dashboard"
+
+
+def _here(path: str, query: dict) -> str:
+    """The page that was asked for, without the token, to return to after signing in."""
+    q = urllib.parse.urlencode({k: v[0] for k, v in query.items() if k not in ("token", "__path")})
+    return path + (f"?{q}" if q else "")
 
 
 def app(environ, start_response):
@@ -113,13 +130,27 @@ def app(environ, start_response):
             return _resp(start_response, "200 OK", "Thanks, noted. This feeds the dashboard so we can fix what the agent missed.",
                          "text/plain")
 
+        if path == "/dashboard/login":
+            if method == "POST":
+                form = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
+                code, nxt = (form.get("code") or [""])[0].strip(), _safe_next((form.get("next") or [""])[0])
+                if config.DASHBOARD_TOKEN and code and hmac.compare_digest(code, config.DASHBOARD_TOKEN):
+                    return _resp(start_response, "303 See Other", "", "text/plain", [("Location", nxt), _auth_cookie()])
+                return _resp(start_response, "401 Unauthorized", dashboard.render_login(nxt, error=True), "text/html")
+            return _resp(start_response, "200 OK", dashboard.render_login(_safe_next((query.get("next") or [""])[0])),
+                         "text/html")
+
         if path in ("/", "/dashboard", "/dashboard/calls", "/dashboard/reports", "/dashboard/setup",
                     "/dashboard/call", "/dashboard/call/action", "/dashboard/export.csv"):
             if method == "POST":   # dashboard forms send the token in the body
                 query = {**query, **urllib.parse.parse_qs(raw.decode("utf-8", "replace"))}
             ok, cookies = _dashboard_allowed(environ, query)
             if not ok:
-                return _resp(start_response, "401 Unauthorized", "Add ?token=… to the URL.", "text/plain")
+                if method == "GET":   # a sign-in page, then straight back to the page that was asked for
+                    nxt = _safe_next(_here("/dashboard" if path == "/" else path, query))
+                    return _resp(start_response, "401 Unauthorized", dashboard.render_login(nxt), "text/html")
+                return _resp(start_response, "401 Unauthorized", "Sign in again: open the dashboard and enter the access code.",
+                             "text/plain")
             token = (query.get("token") or [""])[0]
             if path == "/dashboard/call/action":
                 if method != "POST":
