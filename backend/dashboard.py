@@ -8,6 +8,7 @@ Every call falls in one of three groups, used by the chart, the filters and the 
   follow_up  someone at the studio has to act (slot to confirm, escalation, cancellation, no-show, missed call, nurture)
   closed     not taken forward (not a fit, or no conversation)
 """
+import contextvars
 import html
 import json
 import statistics
@@ -18,6 +19,9 @@ from datetime import datetime, timedelta, timezone
 from . import config
 from .calendly import parse_time, spoken_label
 from .emails import plain_reason
+
+# Who is signed in for the page being rendered (set by web.py): {"kind": "account"|"studio", "name", "email"}.
+VIEWER: contextvars.ContextVar[dict | None] = contextvars.ContextVar("viewer", default=None)
 
 REASON_ORDER = ["OUT_OF_AREA", "OUT_OF_SCOPE_TYPE", "ADVICE_ONLY", "TOO_SMALL", "TIMELINE_IMPOSSIBLE",
                 "BUDGET_MISALIGNED", "NOT_DECISION_MAKER", "EXISTING_CLIENT_COMPLAINT", "NO_INFO"]
@@ -308,7 +312,8 @@ FRIENDLY_DECISION = {"Qualified": "Good fit", "Not qualified": "Not a fit", "Nur
                      "Escalate": "Existing client", "No data": "No conversation"}
 FLASH = {"done": "Marked as done. It's off the to-do list.",
          "reopen": "Reopened. It's back on the to-do list.",
-         "overturn": "Overturned. The caller is on the to-do list for a call back."}
+         "overturn": "Overturned. The caller is on the to-do list for a call back.",
+         "welcome": "Account created. You're signed in."}
 
 
 def _badge(c):
@@ -446,6 +451,13 @@ border-bottom:2px solid transparent;white-space:nowrap;position:relative}
 .tabs a:hover{color:var(--text-primary)}
 .tabs a.on{color:var(--text-primary);font-weight:600;border-bottom-color:var(--brand)}
 .tabs .pip{width:7px;height:7px;border-radius:50%;background:var(--warning);display:inline-block}
+.usermenu{position:relative}
+.usermenu summary{list-style:none;cursor:pointer;border-radius:50%}.usermenu summary::-webkit-details-marker{display:none}
+.uav{width:34px;height:34px;border-radius:50%;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;
+font-weight:700;font-size:13px}
+.umenu{position:absolute;right:0;top:42px;z-index:10;background:var(--surface-1);border:1px solid var(--border);border-radius:12px;
+padding:14px;min-width:230px;box-shadow:0 8px 28px rgba(0,0,0,.14);display:grid;gap:4px}
+.umenu span{color:var(--muted);font-size:12.5px;margin-bottom:8px;overflow-wrap:anywhere}
 .tabs .count{background:var(--critical);color:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:0 6px;line-height:17px}
 .seg{display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:3px}
 .seg a{padding:4px 11px;border-radius:7px;color:var(--text-secondary);text-decoration:none;font-size:13px;white-space:nowrap}
@@ -735,6 +747,27 @@ PERIOD_LABEL = {"1": "today", "7": "in the last 7 days", "30": "in the last 30 d
 PERIOD_VS = {"1": "yesterday", "7": "previous 7 days", "30": "previous 30 days", "mtd": "same days last month"}
 
 
+def _viewer_name() -> str:
+    v = VIEWER.get() or {}
+    return (v.get("name") or v.get("email") or "") if v.get("kind") == "account" else ""
+
+
+def _user_menu() -> str:
+    """Who is signed in, and Sign out. Nothing for the older ?token= links (there's no session to end)."""
+    v = VIEWER.get()
+    if not v:
+        return ""
+    if v.get("kind") == "account":
+        who, sub = v.get("name") or v.get("email"), v.get("email")
+        ini = "".join(p[0].upper() for p in (v.get("name") or v.get("email") or "?").split()[:2] if p[:1].isalnum()) or "?"
+    else:
+        who, sub, ini = "Studio login", "signed in with the studio password", "A"
+    return (f"<details class='usermenu'><summary aria-label='Account: {e(who)}'><span class='uav'>{e(ini[:2])}</span></summary>"
+            f"<div class='umenu'><b>{e(who)}</b><span>{e(sub or '')}</span>"
+            f"<form method='post' action='/dashboard/logout'><button class='btn small' type='submit'>Sign out</button></form>"
+            f"</div></details>")
+
+
 def _page(title: str, body: str, token: str, active: str | None = None, period: str | None = None,
           flash: str | None = None, refresh: bool = False, todo: int = 0, setup_open: bool = False) -> str:
     tabs = []
@@ -759,7 +792,7 @@ def _page(title: str, body: str, token: str, active: str | None = None, period: 
 <body class="viz-root"{' data-refresh="1"' if refresh else ''}>
 <header class="topbar"><div class="wrap"><a class="brand" href="{e(_q('/dashboard', token))}"><span class="mark">A</span>
 <span><b>Aangan Studio</b><small>Phone enquiries</small></span></a>
-<nav class="tabs" aria-label="Sections">{''.join(tabs)}</nav>{seg}</div></header>
+<nav class="tabs" aria-label="Sections">{''.join(tabs)}</nav>{seg}{_user_menu()}</div></header>
 <main><div class="wrap">{body}
 <p class="footer">Every call to the studio is answered by the agent, day or night. It never quotes a price.</p>
 </div></main>{toast}<script>{JS}</script></body></html>"""
@@ -770,31 +803,80 @@ LOGIN_CSS = """
 .login .card{width:100%;max-width:400px;padding:28px}
 .login .brand{margin-bottom:22px}
 .login label{display:block;font-size:14px;font-weight:600;margin:16px 0 6px}
-.login input[type=password]{width:100%;border:1px solid var(--border);background:var(--surface-1);color:var(--text-primary);
-border-radius:10px;padding:11px 12px;font:inherit;font-size:15px}
+.login input[type=password],.login input[type=email],.login input[type=text]{width:100%;border:1px solid var(--border);
+background:var(--surface-1);color:var(--text-primary);border-radius:10px;padding:11px 12px;font:inherit;font-size:15px}
+.login a{color:var(--text-primary);font-weight:600}
+.login .ok{background:var(--good-bg);border-radius:10px;padding:9px 12px;font-size:14px;margin-top:12px}
+.authtabs{display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:3px;margin:16px 0 4px}
+.authtabs a{flex:1;text-align:center;padding:7px 10px;border-radius:7px;text-decoration:none;font-weight:500!important;
+color:var(--text-secondary)!important;font-size:14px}
+.authtabs a.on{background:var(--surface-1);color:var(--text-primary)!important;font-weight:600!important;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .login .btn{width:100%;margin-top:14px;min-height:44px}
 .login .err{background:var(--critical-bg);color:var(--critical-text);border-radius:10px;padding:9px 12px;font-size:14px;margin-top:14px}
 .login .hint{color:var(--muted);font-size:13px;margin-top:14px;line-height:1.5}
 """
 
 
-def render_login(next_path: str = "/dashboard", error: bool = False) -> str:
-    """Sign-in page shown instead of the dashboard to a browser that hasn't entered the access code."""
-    err = ("<div class='err' role='alert'>That code didn't work. Check it and try again.</div>" if error else "")
+def _auth_page(title: str, body: str) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<link rel="icon" href="{FAVICON}"><title>Sign in · Aangan</title><style>{CSS}{LOGIN_CSS}</style></head>
+<link rel="icon" href="{FAVICON}"><title>{e(title)} · Aangan</title><style>{CSS}{LOGIN_CSS}</style></head>
 <body class="viz-root"><main class="login"><div class="card">
 <div class="brand"><span class="mark">A</span><span><b>Aangan Studio</b><small>Phone enquiries dashboard</small></span></div>
-<h1 style="font-size:22px">Sign in</h1>
-<p class="sub" style="margin-top:6px">Enter the studio's access code to see calls, bookings and reports.</p>
-<form method="post" action="/dashboard/login">
-<input type="hidden" name="next" value="{e(next_path)}">
-<label for="code">Access code</label>
-<input id="code" name="code" type="password" autocomplete="current-password" required autofocus>
-{err}<button class="btn primary" type="submit">Open dashboard</button></form>
-<p class="hint">This browser will remember you for 30 days. Don't have the code? Ask Aastha in the founder's office.</p>
-</div></main></body></html>"""
+{body}</div></main></body></html>"""
+
+
+def render_login(next_path: str = "/dashboard", mode: str = "account", error: str | bool | None = None,
+                 email: str | None = None, flash: str | None = None) -> str:
+    """Two ways in: your own account, or the shared studio password."""
+    mode = "studio" if mode == "studio" else "account"
+    if error is True:
+        error = "That didn't work. Check it and try again."
+    err = f"<div class='err' role='alert'>{e(error)}</div>" if error else ""
+    note = ("<div class='ok' role='status'>You're signed out.</div>" if flash == "out" else "")
+    nxt = e(next_path)
+    tab = lambda m, label: (f"<a class='{'on' if mode == m else ''}' href='/dashboard/login?{urllib.parse.urlencode({'mode': m, 'next': next_path})}'"  # noqa: E731
+                            f"{' aria-current=page' if mode == m else ''}>{label}</a>")
+    if mode == "account":
+        form = (f"<form method='post' action='/dashboard/login'><input type='hidden' name='mode' value='account'>"
+                f"<input type='hidden' name='next' value='{nxt}'>"
+                f"<label for='email'>Email</label><input id='email' name='email' type='email' autocomplete='email' required "
+                f"value='{e(email or '')}' {'' if email else 'autofocus'}>"
+                f"<label for='password'>Password</label><input id='password' name='password' type='password' "
+                f"autocomplete='current-password' required {'autofocus' if email else ''}>"
+                f"{err}<button class='btn primary' type='submit'>Sign in</button></form>"
+                f"<p class='hint'>New here? <a href='/dashboard/signup?{urllib.parse.urlencode({'next': next_path})}'>Create an account</a></p>")
+    else:
+        form = (f"<form method='post' action='/dashboard/login'><input type='hidden' name='mode' value='studio'>"
+                f"<input type='hidden' name='next' value='{nxt}'>"
+                f"<label for='password'>Studio password</label><input id='password' name='password' type='password' "
+                f"autocomplete='current-password' required autofocus>"
+                f"{err}<button class='btn primary' type='submit'>Open dashboard</button></form>"
+                f"<p class='hint'>The shared password for the studio team. Ask Aastha if you don't have it.</p>")
+    body = (f"<h1 style='font-size:22px'>Sign in</h1>{note}"
+            f"<nav class='authtabs' aria-label='How to sign in'>{tab('account', 'My account')}{tab('studio', 'Studio password')}</nav>"
+            f"{form}<p class='hint'>You stay signed in on this browser for 30 days.</p>")
+    return _auth_page("Sign in", body)
+
+
+def render_signup(next_path: str = "/dashboard", form: dict | None = None, error: str | None = None) -> str:
+    f = form or {}
+    err = f"<div class='err' role='alert'>{e(error)}</div>" if error else ""
+    body = (f"<h1 style='font-size:22px'>Create your account</h1>"
+            f"<p class='sub' style='margin-top:6px'>For the Aangan team. You'll sign in with your own email and password.</p>"
+            f"<form method='post' action='/dashboard/signup'><input type='hidden' name='next' value='{e(next_path)}'>"
+            f"<label for='name'>Your name</label><input id='name' name='name' type='text' autocomplete='name' "
+            f"value='{e(f.get('name', ''))}' autofocus>"
+            f"<label for='email'>Email</label><input id='email' name='email' type='email' autocomplete='email' required "
+            f"value='{e(f.get('email', ''))}'>"
+            f"<label for='password'>Choose a password</label><input id='password' name='password' type='password' "
+            f"autocomplete='new-password' minlength='8' required><div class='hint' style='margin-top:4px'>At least 8 characters.</div>"
+            f"<label for='studio_password'>Studio password</label><input id='studio_password' name='studio_password' "
+            f"type='password' autocomplete='off' required>"
+            f"<div class='hint' style='margin-top:4px'>Only the team knows it, so only the team can join. Ask Aastha.</div>"
+            f"{err}<button class='btn primary' type='submit'>Create account</button></form>"
+            f"<p class='hint'>Already have an account? <a href='/dashboard/login?{urllib.parse.urlencode({'next': next_path})}'>Sign in</a></p>")
+    return _auth_page("Create account", body)
 
 
 def _delta(cur, prev, good_when_up=True, unit="", vs="previous period"):
@@ -1332,7 +1414,7 @@ def _handle_box(c: dict, token: str) -> str:
 
     def form(action, label, primary=False, fields=True, placeholder="What happened? e.g. Called back, booked for Tuesday"):
         inputs = (f"<input name='note' placeholder='{e(placeholder)}' aria-label='Note'>"
-                  "<input name='by' placeholder='Your name' aria-label='Your name'>") if fields else ""
+                  f"<input name='by' placeholder='Your name' aria-label='Your name' value='{e(_viewer_name())}'>") if fields else ""
         return (f"<form method='post' action='/dashboard/call/action'>"
                 f"<input type='hidden' name='call_id' value='{e(c['call_id'])}'><input type='hidden' name='token' value='{e(token)}'>"
                 f"<input type='hidden' name='action' value='{action}'><input type='hidden' name='back' value='{e(back)}'>{inputs}"

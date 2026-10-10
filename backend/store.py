@@ -145,6 +145,51 @@ class LocalStore:
         hits = [e for e in self.events if _event_matches(e, kind, since_iso, subject_prefix)]
         return len(hits), max((e["created_at"] for e in hits), default=None)
 
+    # --- sign-in (backend/auth.py) — kept in memory only, never in the JSON file ---
+    def _auth(self):
+        if not hasattr(self, "_a"):
+            self._a = {"users": {}, "sessions": {}, "fails": [], "settings": {}}
+        return self._a
+
+    def get_setting(self, key):
+        return self._auth()["settings"].get(key)
+
+    def set_setting(self, key, value):
+        self._auth()["settings"][key] = value
+
+    def create_user(self, email, name, password_hash):
+        users = self._auth()["users"]
+        u = {"id": len(users) + 1, "email": email, "name": name, "password_hash": password_hash, "created_at": utcnow()}
+        users[u["id"]] = u
+        return dict(u)
+
+    def get_user_by_email(self, email):
+        return next((dict(u) for u in self._auth()["users"].values() if u["email"] == email), None)
+
+    def get_user_by_id(self, user_id):
+        u = self._auth()["users"].get(user_id)
+        return dict(u) if u else None
+
+    def touch_user_login(self, user_id):
+        if user_id in self._auth()["users"]:
+            self._auth()["users"][user_id]["last_login_at"] = utcnow()
+
+    def create_session(self, token_hash, user_id, expires_at):
+        self._auth()["sessions"][token_hash] = {"user_id": user_id, "expires_at": expires_at.isoformat()}
+
+    def get_session(self, token_hash):
+        s = self._auth()["sessions"].get(token_hash)
+        return dict(s) if s else None
+
+    def delete_session(self, token_hash):
+        self._auth()["sessions"].pop(token_hash, None)
+
+    def record_auth_failure(self, key):
+        self._auth()["fails"].append((key, utcnow()))
+
+    def count_auth_failures(self, key, since_iso):
+        return sum(1 for k, t in self._auth()["fails"] if k == key and t >= since_iso)
+
 
 class PostgresStore:
     """Neon (or any Postgres) via DATABASE_URL. Same interface as the other stores.
@@ -268,6 +313,45 @@ class PostgresStore:
             params.append(subject_prefix.replace("%", r"\%") + "%")
         r = self._run(sql, tuple(params), "one") or {}
         return int(r.get("n") or 0), r.get("t")
+
+    # --- sign-in (backend/auth.py) ---
+    def get_setting(self, key):
+        r = self._run("select value from app_settings where key = %s", (key,), "one")
+        return r["value"] if r else None
+
+    def set_setting(self, key, value):
+        self._run("insert into app_settings (key, value) values (%s, %s) "
+                  "on conflict (key) do update set value = excluded.value", (key, value), fetch=None)
+
+    def create_user(self, email, name, password_hash):
+        return self._run("insert into users (email, name, password_hash) values (%s, %s, %s) returning *",
+                         (email, name, password_hash), "one")
+
+    def get_user_by_email(self, email):
+        return self._run("select * from users where email = %s", (email,), "one")
+
+    def get_user_by_id(self, user_id):
+        return self._run("select * from users where id = %s", (user_id,), "one")
+
+    def touch_user_login(self, user_id):
+        self._run("update users set last_login_at = now() where id = %s", (user_id,), fetch=None)
+
+    def create_session(self, token_hash, user_id, expires_at):
+        self._run("insert into sessions (token_hash, user_id, expires_at) values (%s, %s, %s)",
+                  (token_hash, user_id, expires_at), fetch=None)
+
+    def get_session(self, token_hash):
+        return self._run("select * from sessions where token_hash = %s", (token_hash,), "one")
+
+    def delete_session(self, token_hash):
+        self._run("delete from sessions where token_hash = %s", (token_hash,), fetch=None)
+
+    def record_auth_failure(self, key):
+        self._run("insert into auth_attempts (key) values (%s)", (key,), fetch=None)
+
+    def count_auth_failures(self, key, since_iso):
+        r = self._run("select count(*) as n from auth_attempts where key = %s and created_at >= %s", (key, since_iso), "one")
+        return int((r or {}).get("n") or 0)
 
 
 def _from_db(row: dict) -> dict:

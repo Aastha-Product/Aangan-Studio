@@ -95,6 +95,36 @@ alter table calls add column if not exists site_address text;
 alter table calls add column if not exists booking_provider text;
 alter table calls add column if not exists processing_started_at timestamptz;
 alter table calls add column if not exists priority_reasons text[];
+-- Dashboard sign-in (backend/auth.py). Passwords are stored only as PBKDF2 hashes; session cookies only as SHA-256.
+create table if not exists users (
+  id            bigserial primary key,
+  email         text not null unique,                -- stored lower-case
+  name          text,
+  password_hash text not null,
+  created_at    timestamptz default now(),
+  last_login_at timestamptz
+);
+create table if not exists sessions (
+  token_hash  text primary key,                      -- sha256 of the cookie value
+  user_id     bigint references users(id) on delete cascade,   -- null = signed in with the studio password
+  created_at  timestamptz default now(),
+  expires_at  timestamptz not null
+);
+create table if not exists auth_attempts (           -- failed sign-ins, for slowing down guessing
+  id         bigserial primary key,
+  key        text not null,                          -- "ip:<address>" or "email:<address>"
+  created_at timestamptz default now()
+);
+create index if not exists auth_attempts_key_idx on auth_attempts (key, created_at);
+create table if not exists app_settings (            -- e.g. the studio password's hash (kept out of the code)
+  key   text primary key,
+  value text not null
+);
+alter table users enable row level security;
+alter table sessions enable row level security;
+alter table auth_attempts enable row level security;
+alter table app_settings enable row level security;
+
 alter table calls add column if not exists handled_at timestamptz;   -- follow-up done (dashboard "Mark as done")
 alter table calls add column if not exists handled_by text;
 alter table calls add column if not exists handled_note text;

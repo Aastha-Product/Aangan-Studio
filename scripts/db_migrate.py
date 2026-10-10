@@ -19,7 +19,7 @@ def main():
     sql = (config.ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
     with psycopg.connect(config.DATABASE_URL, autocommit=True, connect_timeout=15) as conn:
         conn.execute(sql)
-        for table in ("calls", "call_events"):
+        for table in ("calls", "call_events", "users", "sessions", "auth_attempts", "app_settings"):
             n = conn.execute(f"select count(*) from {table}").fetchone()[0]
             cols = conn.execute("select count(*) from information_schema.columns where table_name = %s", (table,)).fetchone()[0]
             print(f"OK {table}: {cols} columns, {n} rows")

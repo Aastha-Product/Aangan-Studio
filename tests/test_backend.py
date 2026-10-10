@@ -5,6 +5,7 @@
 import io
 import json
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace as NS
 from unittest import mock
@@ -442,34 +443,6 @@ class OtherEndpoints(Base):
         self.assertIn("Outside Pune / PCMC", out)
         self.assertTrue(wsgi("GET", "/dashboard/export.csv")[0].startswith("401"))
 
-    def test_sign_in_page_instead_of_token_error(self):
-        def raw(method, path, body=b"", headers=None):
-            environ = {"REQUEST_METHOD": method, "PATH_INFO": path.split("?")[0],
-                       "QUERY_STRING": path.split("?", 1)[1] if "?" in path else "",
-                       "CONTENT_LENGTH": str(len(body)), "wsgi.input": io.BytesIO(body), **(headers or {})}
-            out = {}
-            data = b"".join(web.app(environ, lambda s, h: out.update(status=s, headers=dict(h))))
-            return out["status"], out["headers"], data.decode()
-
-        status, _, page = raw("GET", "/dashboard/calls?group=booked")
-        self.assertTrue(status.startswith("401"))
-        self.assertIn("Access code", page)
-        self.assertIn('value="/dashboard/calls?group=booked"', page)        # comes back to the page asked for
-        form = {"CONTENT_TYPE": "application/x-www-form-urlencoded"}
-        status, h, page = raw("POST", "/dashboard/login", b"code=nope&next=%2Fdashboard%2Fcalls", form)
-        self.assertTrue(status.startswith("401"))
-        self.assertIn("didn't work", page)
-        self.assertNotIn("Set-Cookie", h)
-        status, h, _ = raw("POST", "/dashboard/login", b"code=dash_test&next=%2Fdashboard%2Fcalls%3Fgroup%3Dbooked", form)
-        self.assertTrue(status.startswith("303"))
-        self.assertEqual(h["Location"], "/dashboard/calls?group=booked")
-        self.assertIn("dash_token=dash_test", h["Set-Cookie"])
-        self.assertIn("HttpOnly", h["Set-Cookie"])
-        status, h, _ = raw("POST", "/dashboard/login", b"code=dash_test&next=https%3A%2F%2Fevil.example", form)
-        self.assertEqual(h["Location"], "/dashboard")                       # never sent off the dashboard
-        status, _, page = raw("GET", "/dashboard/calls", headers={"HTTP_COOKIE": "dash_token=dash_test"})
-        self.assertTrue(status.startswith("200"))                           # the cookie alone opens every page
-
     def test_dashboard_empty_state(self):
         status, page = wsgi("GET", "/dashboard?token=dash_test")
         self.assertTrue(status.startswith("200"))
@@ -483,6 +456,109 @@ class OtherEndpoints(Base):
             cost = dashboard.call_cost(c)
             self.assertAlmostEqual(cost["usd"], 4.0)
             self.assertAlmostEqual(dashboard.to_inr(cost), 4.0 * 80 + 2 * 5 + 1.0)
+
+
+class SignIn(Base):
+    """Studio password, personal accounts, sessions, sign-out, guessing protection."""
+
+    def setUp(self):
+        super().setUp()
+        from backend import auth
+        self.auth = auth
+        self.store.set_setting("studio_password_hash", auth.hash_password("Aangan-studio"))
+
+    def req(self, method, path, form=None, cookie=None):
+        body = urllib.parse.urlencode(form or {}).encode()
+        environ = {"REQUEST_METHOD": method, "PATH_INFO": path.split("?")[0],
+                   "QUERY_STRING": path.split("?", 1)[1] if "?" in path else "", "CONTENT_LENGTH": str(len(body)),
+                   "wsgi.input": io.BytesIO(body), "CONTENT_TYPE": "application/x-www-form-urlencoded",
+                   "REMOTE_ADDR": "10.0.0.1", **({"HTTP_COOKIE": cookie} if cookie else {})}
+        out = {}
+        data = b"".join(web.app(environ, lambda s, h: out.update(status=s, headers=h)))
+        cookies = [v for k, v in out["headers"] if k == "Set-Cookie"]
+        location = next((v for k, v in out["headers"] if k == "Location"), None)
+        import html
+        return out["status"][:3], location, cookies, html.unescape(data.decode())
+
+    @staticmethod
+    def session(cookies):
+        return next(c.split(";")[0] for c in cookies if c.startswith("aangan_session=") and "Max-Age=0" not in c)
+
+    def test_not_signed_in_gets_the_sign_in_page_and_comes_back(self):
+        status, _, _, page = self.req("GET", "/dashboard/calls?group=booked")
+        self.assertEqual(status, "401")
+        self.assertIn("My account", page)
+        self.assertIn("Studio password", page)
+        self.assertIn("value='/dashboard/calls?group=booked'", page)
+
+    def test_studio_password(self):
+        status, _, cookies, page = self.req("POST", "/dashboard/login", {"mode": "studio", "password": "wrong", "next": "/dashboard/calls"})
+        self.assertEqual((status, cookies), ("401", []))
+        self.assertIn("didn't work", page)
+        status, loc, cookies, _ = self.req("POST", "/dashboard/login",
+                                           {"mode": "studio", "password": "Aangan-studio", "next": "/dashboard/calls"})
+        self.assertEqual((status, loc), ("303", "/dashboard/calls"))
+        self.assertIn("HttpOnly", cookies[0])
+        status, _, _, page = self.req("GET", "/dashboard/calls", cookie=self.session(cookies))
+        self.assertEqual(status, "200")
+        self.assertIn("Studio login", page)
+
+    def test_sign_up_needs_the_studio_password_then_own_login_works(self):
+        form = {"name": "Riya Kulkarni", "email": "Riya@Aangan.test", "password": "designer-pass", "next": "/dashboard"}
+        status, _, cookies, page = self.req("POST", "/dashboard/signup", {**form, "studio_password": "guess"})
+        self.assertEqual((status, cookies), ("400", []))
+        self.assertIn("studio password is not right", page)
+        self.assertIsNone(self.store.get_user_by_email("riya@aangan.test"))
+        status, loc, cookies, _ = self.req("POST", "/dashboard/signup", {**form, "studio_password": "Aangan-studio"})
+        self.assertEqual((status, loc), ("303", "/dashboard?msg=welcome"))
+        user = self.store.get_user_by_email("riya@aangan.test")                 # email stored lower-case
+        self.assertTrue(user["password_hash"].startswith("pbkdf2_sha256$"))
+        self.assertNotIn("designer-pass", user["password_hash"])                 # never the password itself
+        page = self.req("GET", "/dashboard?msg=welcome", cookie=self.session(cookies))[3]
+        self.assertIn("Riya Kulkarni", page)
+        self.assertIn("Account created", page)
+        # duplicate email
+        status, _, _, page = self.req("POST", "/dashboard/signup", {**form, "studio_password": "Aangan-studio"})
+        self.assertIn("already an account", page)
+        # sign in with own email + password
+        status, _, _, page = self.req("POST", "/dashboard/login", {"mode": "account", "email": "riya@aangan.test", "password": "nope"})
+        self.assertEqual(status, "401")
+        status, loc, cookies, _ = self.req("POST", "/dashboard/login",
+                                           {"mode": "account", "email": " RIYA@aangan.test ", "password": "designer-pass",
+                                            "next": "https://evil.example/"})
+        self.assertEqual((status, loc), ("303", "/dashboard"))                   # never sent off the dashboard
+        # "Mark as done" records who did it
+        self.store.upsert_call({"call_id": "p9", "started_at": config.now_ist().isoformat(), "decision": "Qualified",
+                                "status": "booking_pending"})
+        self.req("POST", "/dashboard/call/action", {"call_id": "p9", "action": "done"}, cookie=self.session(cookies))
+        self.assertEqual(self.store.get_call("p9")["handled_by"], "Riya Kulkarni")
+
+    def test_sign_up_rejects_bad_email_and_short_password(self):
+        base = {"name": "A", "studio_password": "Aangan-studio"}
+        self.assertIn("doesn't look right", self.req("POST", "/dashboard/signup", {**base, "email": "nope", "password": "longenough"})[3])
+        self.assertIn("at least 8", self.req("POST", "/dashboard/signup", {**base, "email": "a@b.co", "password": "short"})[3])
+
+    def test_sign_out_ends_the_session(self):
+        cookies = self.req("POST", "/dashboard/login", {"mode": "studio", "password": "Aangan-studio"})[2]
+        sess = self.session(cookies)
+        status, loc, cleared, _ = self.req("POST", "/dashboard/logout", cookie=sess)
+        self.assertEqual((status, loc), ("303", "/dashboard/login?msg=out"))
+        self.assertTrue(any(c.startswith("aangan_session=;") and "Max-Age=0" in c for c in cleared))
+        self.assertEqual(self.req("GET", "/dashboard", cookie=sess)[0], "401")  # the old cookie no longer works
+        self.assertIn("signed out", self.req("GET", "/dashboard/login?msg=out")[3])
+
+    def test_guessing_is_slowed_down(self):
+        for _ in range(8):
+            self.req("POST", "/dashboard/login", {"mode": "studio", "password": "guess"})
+        status, _, _, page = self.req("POST", "/dashboard/login", {"mode": "studio", "password": "Aangan-studio"})
+        self.assertEqual(status, "429")                                          # even the right one, for 15 minutes
+        self.assertIn("Too many tries", page)
+
+    def test_expired_or_forged_session_is_refused(self):
+        self.assertEqual(self.req("GET", "/dashboard", cookie="aangan_session=forged")[0], "401")
+        from datetime import datetime as dt, timedelta as td, timezone as tz
+        self.store.create_session(self.auth._token_hash("old"), None, dt.now(tz.utc) - td(minutes=1))
+        self.assertEqual(self.req("GET", "/dashboard", cookie="aangan_session=old")[0], "401")
 
 
 class Helpers(unittest.TestCase):

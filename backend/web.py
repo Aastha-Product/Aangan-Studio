@@ -6,7 +6,9 @@ POST /api/vaani/webhook      Vaani call_started / call_ended / call_postprocessi
 GET  /api/cron/digest        7pm digest (Vercel cron, Bearer CRON_SECRET)
 GET  /api/reask              designer's "I had to re-ask the basics" tick    (signed link)
 GET  /dashboard              Nikhil's dashboard (?token=DASHBOARD_TOKEN once, or the sign-in page; then a 30-day cookie)
-GET/POST /dashboard/login    access-code sign-in
+GET/POST /dashboard/login    sign in: own account (email + password) or the studio password
+GET/POST /dashboard/signup   create an account (needs the studio password, so only the team can join)
+POST /dashboard/logout       sign out
 GET  /dashboard/call         one call: checks, score, quotes, transcript, activity
 POST /dashboard/call/action  mark a follow-up done / reopen it / overturn a rejection (dashboard token)
 GET  /dashboard/export.csv   the period's calls as a spreadsheet
@@ -21,7 +23,7 @@ import urllib.parse
 from datetime import timedelta
 from http.cookies import SimpleCookie
 
-from . import actions, calcom, calendly, config, dashboard, digest, emails, vaani
+from . import actions, auth, calcom, calendly, config, dashboard, digest, emails, vaani
 from .store import default_store, utcnow
 
 _store = None
@@ -43,20 +45,43 @@ def _resp(start_response, status: str, body, ctype="application/json", headers=N
     return [data]
 
 
-def _dashboard_allowed(environ, query) -> tuple[bool, list]:
+def _cookie(environ, name) -> str | None:
+    c = SimpleCookie(environ.get("HTTP_COOKIE", "")).get(name)
+    return c.value if c else None
+
+
+def _viewer(environ, query, store) -> tuple[dict | None, list]:
+    """Who is looking: a signed-in account, the studio password, or the older ?token= link. -> (viewer, cookies)."""
+    v = auth.viewer(store, _cookie(environ, auth.COOKIE))
+    if v:
+        return v, []
     token = config.DASHBOARD_TOKEN
     if not token:
-        return (not os.environ.get("VERCEL")), []          # no token set: local only
+        return ({"kind": "studio"} if not os.environ.get("VERCEL") else None), []   # no token set: local only
     given = (query.get("token") or [""])[0]
-    cookie = SimpleCookie(environ.get("HTTP_COOKIE", "")).get("dash_token")
     if given and hmac.compare_digest(given, token):
-        return True, [_auth_cookie()]
-    return bool(cookie and hmac.compare_digest(cookie.value, token)), []
+        return {"kind": "studio"}, [_auth_cookie()]
+    old = _cookie(environ, "dash_token")
+    return ({"kind": "studio"} if old and hmac.compare_digest(old, token) else None), []
+
+
+def _dashboard_allowed(environ, query) -> tuple[bool, list]:   # kept for older callers
+    v, cookies = _viewer(environ, query, get_store())
+    return bool(v), cookies
 
 
 def _auth_cookie() -> tuple[str, str]:
-    """The browser remembers the dashboard for 30 days (HttpOnly: page scripts can't read it)."""
+    """The ?token= link: the browser remembers the dashboard for 30 days (HttpOnly: page scripts can't read it)."""
     return ("Set-Cookie", f"dash_token={config.DASHBOARD_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000")
+
+
+def _client_ip(environ) -> str:
+    return (environ.get("HTTP_X_FORWARDED_FOR") or environ.get("REMOTE_ADDR") or "").split(",")[0].strip()
+
+
+def _form(raw: bytes) -> dict:
+    f = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
+    return {k: v[0] for k, v in f.items()}
 
 
 def _safe_next(nxt: str) -> str:
@@ -130,27 +155,20 @@ def app(environ, start_response):
             return _resp(start_response, "200 OK", "Thanks, noted. This feeds the dashboard so we can fix what the agent missed.",
                          "text/plain")
 
-        if path == "/dashboard/login":
-            if method == "POST":
-                form = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
-                code, nxt = (form.get("code") or [""])[0].strip(), _safe_next((form.get("next") or [""])[0])
-                if config.DASHBOARD_TOKEN and code and hmac.compare_digest(code, config.DASHBOARD_TOKEN):
-                    return _resp(start_response, "303 See Other", "", "text/plain", [("Location", nxt), _auth_cookie()])
-                return _resp(start_response, "401 Unauthorized", dashboard.render_login(nxt, error=True), "text/html")
-            return _resp(start_response, "200 OK", dashboard.render_login(_safe_next((query.get("next") or [""])[0])),
-                         "text/html")
+        if path in ("/dashboard/login", "/dashboard/signup", "/dashboard/logout"):
+            return _auth_route(start_response, store, environ, path, method, query, raw)
 
         if path in ("/", "/dashboard", "/dashboard/calls", "/dashboard/reports", "/dashboard/setup",
                     "/dashboard/call", "/dashboard/call/action", "/dashboard/export.csv"):
             if method == "POST":   # dashboard forms send the token in the body
                 query = {**query, **urllib.parse.parse_qs(raw.decode("utf-8", "replace"))}
-            ok, cookies = _dashboard_allowed(environ, query)
-            if not ok:
-                if method == "GET":   # a sign-in page, then straight back to the page that was asked for
+            viewer, cookies = _viewer(environ, query, store)
+            if not viewer:
+                if method == "GET":   # the sign-in page, then straight back to the page that was asked for
                     nxt = _safe_next(_here("/dashboard" if path == "/" else path, query))
                     return _resp(start_response, "401 Unauthorized", dashboard.render_login(nxt), "text/html")
-                return _resp(start_response, "401 Unauthorized", "Sign in again: open the dashboard and enter the access code.",
-                             "text/plain")
+                return _resp(start_response, "401 Unauthorized", "Sign in again: open the dashboard and sign in.", "text/plain")
+            dashboard.VIEWER.set(viewer)               # the top bar shows who is signed in
             token = (query.get("token") or [""])[0]
             if path == "/dashboard/call/action":
                 if method != "POST":
@@ -158,8 +176,8 @@ def app(environ, start_response):
                 call_id = (query.get("call_id") or [""])[0]
                 if not store.get_call(call_id):
                     return _resp(start_response, "404 Not Found", "No such call.", "text/plain")
-                done = call_action(store, call_id, (query.get("action") or [""])[0],
-                                   (query.get("by") or [""])[0], (query.get("note") or [""])[0])
+                by = (query.get("by") or [""])[0] or viewer.get("name") or viewer.get("email") or ""
+                done = call_action(store, call_id, (query.get("action") or [""])[0], by, (query.get("note") or [""])[0])
                 if not done:
                     return _resp(start_response, "400 Bad Request", "Unknown action.", "text/plain")
                 back = (query.get("back") or [""])[0]
@@ -208,6 +226,58 @@ def app(environ, start_response):
         return _resp(start_response, "500 Internal Server Error", {"error": "internal error"})
 
 
+def _auth_route(start_response, store, environ, path, method, query, raw):
+    """Sign in (studio password or own account), create an account, sign out."""
+    html = lambda status, page, headers=None: _resp(start_response, status, page, "text/html", headers)  # noqa: E731
+    go = lambda where, cookies: _resp(start_response, "303 See Other", "", "text/plain",  # noqa: E731
+                                      [("Location", where), *[("Set-Cookie", c) for c in cookies]])
+    ip_key = f"ip:{_client_ip(environ)}"
+
+    if path == "/dashboard/logout":
+        auth.end_session(store, _cookie(environ, auth.COOKIE))
+        old = "dash_token=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+        return go("/dashboard/login?msg=out", [auth.clear_cookie(), old])
+
+    if method != "POST":
+        nxt = _safe_next((query.get("next") or [""])[0])
+        msg = (query.get("msg") or [None])[0]
+        if path == "/dashboard/signup":
+            return html("200 OK", dashboard.render_signup(nxt))
+        return html("200 OK", dashboard.render_login(nxt, mode=(query.get("mode") or ["account"])[0], flash=msg))
+
+    f = _form(raw)
+    nxt = _safe_next(f.get("next", ""))
+    if path == "/dashboard/signup":
+        if auth.too_many_failures(store, [ip_key]):
+            return html("429 Too Many Requests", dashboard.render_signup(nxt, f, "Too many tries. Wait 15 minutes and try again."))
+        user, why = auth.sign_up(store, f.get("name", ""), f.get("email", ""), f.get("password", ""), f.get("studio_password", ""))
+        if not user:
+            if "studio password" in why:
+                auth.record_failure(store, [ip_key])
+            return html("400 Bad Request", dashboard.render_signup(nxt, f, why))
+        _, cookie = auth.new_session(store, user["id"])
+        return go(nxt + ("&" if "?" in nxt else "?") + "msg=welcome", [cookie])
+
+    mode = f.get("mode", "account")
+    email_key = f"email:{f.get('email', '').strip().lower()}" if mode == "account" else None
+    if auth.too_many_failures(store, [ip_key, email_key]):
+        return html("429 Too Many Requests",
+                    dashboard.render_login(nxt, mode=mode, error="Too many tries. Wait 15 minutes and try again.", email=f.get("email")))
+    if mode == "studio":
+        if auth.studio_password_ok(store, f.get("password", "")):
+            _, cookie = auth.new_session(store, None)
+            return go(nxt, [cookie])
+        auth.record_failure(store, [ip_key])
+        return html("401 Unauthorized", dashboard.render_login(nxt, mode="studio", error="That password didn't work."))
+    user = auth.sign_in(store, f.get("email", ""), f.get("password", ""))
+    if user:
+        _, cookie = auth.new_session(store, user["id"])
+        return go(nxt, [cookie])
+    auth.record_failure(store, [ip_key, email_key])
+    return html("401 Unauthorized", dashboard.render_login(nxt, mode="account", email=f.get("email"),
+                                                           error="That email and password don't match an account."))
+
+
 def call_action(store, call_id: str, action: str, by: str, note: str) -> bool:
     """Dashboard buttons. done: follow-up handled · reopen: undo that · overturn: a rejected caller gets a callback."""
     by, note = by.strip()[:80] or None, note.strip()[:500] or None
@@ -250,7 +320,8 @@ def migrate() -> dict:
     sql = (config.ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
     with psycopg.connect(config.DATABASE_URL, autocommit=True, connect_timeout=15) as conn:
         conn.execute(sql)
-        counts = {t: conn.execute(f"select count(*) from {t}").fetchone()[0] for t in ("calls", "call_events")}
+        counts = {t: conn.execute(f"select count(*) from {t}").fetchone()[0]
+                  for t in ("calls", "call_events", "users", "sessions", "app_settings")}
     return {"ok": True, "tables": counts}
 
 
