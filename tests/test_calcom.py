@@ -183,6 +183,18 @@ class Webhooks(CalcomBase):
         self.assertTrue(row["report_card_sent_at"])
         self.assertFalse(any("Confirm a consultation slot" in e["subject"] for e in self.http.emails()))
 
+    def test_returning_callers_new_booking_goes_to_the_new_call(self):
+        """Found in the live test: the same email used to pull a new booking onto the caller's old, cancelled call."""
+        self.store.upsert_call({"call_id": "old-call", "caller_number": "+919811111111", "status": "cancelled",
+                                "invitee_email": "priya.k@gmail.com", "invitee_uri": "calcom:bk_old",
+                                "report_card_sent_at": "2026-10-01T10:00:00+00:00", "started_at": "2026-10-01T09:00:00+00:00"})
+        self._live_call("new-call", "+919811111111")
+        self._post("BOOKING_CREATED", self._vaani_booking(phoneNumber="+919811111111"))
+        self.assertEqual(self.store.get_call("new-call")["status"], "booked")
+        old = self.store.get_call("old-call")
+        self.assertEqual((old["status"], old["invitee_uri"]), ("cancelled", "calcom:bk_old"))
+        self.assertFalse(any(e["subject"].startswith("Time changed") for e in self.http.emails()))
+
     def test_vaani_booking_matched_as_only_call_in_progress(self):
         self._live_call("v-only", "+919822222222")
         self._live_call("v-old", "+919833333333", minutes_ago=90)

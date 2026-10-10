@@ -151,12 +151,18 @@ def maybe_send_report_card(store, call_id: str) -> bool:
 # invitee_email, invitee_name, slot_start, designer_email, designer_name, cancel_url, reschedule_url.
 
 def _find_booking_row(store, b: dict) -> dict | None:
-    for field, value in (("call_id", b.get("call_id")), ("invitee_uri", b.get("ref")),
-                         ("invitee_uri", b.get("old_ref")), ("invitee_email", b.get("invitee_email"))):
+    """The call a booking belongs to: by call id or booking reference (exact). By email only for a recent call
+    that has no booking yet. A returning caller's new booking must not land on their old, cancelled call."""
+    for field, value in (("call_id", b.get("call_id")), ("invitee_uri", b.get("ref")), ("invitee_uri", b.get("old_ref"))):
         if value:
             row = store.get_call(value) if field == "call_id" else store.find_call(field, value)
             if row:
                 return row
+    if b.get("invitee_email"):
+        row = store.find_call("invitee_email", b["invitee_email"])
+        t = row and (row.get("started_at") or row.get("created_at"))
+        if row and not row.get("invitee_uri") and t and parse_time(t) >= datetime.now(timezone.utc) - timedelta(hours=2):
+            return row
     return None
 
 
