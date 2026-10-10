@@ -19,6 +19,7 @@ from .store import utcnow
 PER_ADDRESS_PER_HOUR = 6
 PER_DAY = 300                       # a ceiling on what the public page can spend in one day
 ROOM_RE = re.compile(r"^webrtc-\d{6,}-[0-9a-f]{4,}$")
+TRANSCRIPT_SETTLE_SECONDS = 45       # Vaani can expose a partial transcript before its final pass is done
 
 
 def valid_room(room: str) -> bool:
@@ -66,8 +67,9 @@ def end(store, room: str, seconds) -> tuple[str, dict]:
             secs = max(0, min(int(float(seconds)), 3600))
         except (TypeError, ValueError):
             secs = None
-        if secs is None and row.get("started_at"):
+        if (secs is None or secs <= 0) and row.get("started_at"):
             secs = int((datetime.now(timezone.utc) - parse_time(row["started_at"])).total_seconds())
+            secs = max(0, min(secs, 3600))
         store.update_call(room, {"ended_at": utcnow(), "duration_sec": secs})
         store.log_event(room, "webcall_ended", {"seconds": secs})
     return status(store, room)
@@ -85,17 +87,22 @@ def finish(store, row: dict) -> bool:
     """Fetch the transcript from Vaani and run the usual post-call steps, once. True when the call is processed."""
     if row.get("processed_at"):
         return True
+    if row.get("ended_at") and (datetime.now(timezone.utc) - parse_time(row["ended_at"])).total_seconds() < TRANSCRIPT_SETTLE_SECONDS:
+        return False
     room = row["call_id"]
     transcript = vaani.get_transcript(room)
     if not transcript:
         return False                         # Vaani is still writing it; the page asks again
+    transcript = vaani.normalise_transcript(transcript)
+    if not transcript:
+        return False                         # Vaani returned a placeholder/partial shape; wait for usable turns
     if not store.claim_processing(room):
         return bool((store.get_call(room) or {}).get("processed_at"))
     summary = vaani.get_summary(room)
     if summary:
         store.update_call(room, {"summary": summary})
     started = parse_time(row["started_at"]) if row.get("started_at") else None
-    actions.process_completed_call(store, room, vaani.normalise_transcript(transcript), started)
+    actions.process_completed_call(store, room, transcript, started)
     return True
 
 

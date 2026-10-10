@@ -622,6 +622,8 @@ class WebCalls(Base):
         self.assertEqual(json.loads(out), {"done": False})
         self.assertEqual(self.store.get_call(self.ROOM)["duration_sec"], 251)
         # Vaani has the transcript now: processed once, with the spoken phone + email as callback details
+        old_end = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        self.store.update_call(self.ROOM, {"ended_at": old_end})
         self.transcript = "AGENT: Hello, Aangan Studio.\n\n USER: Hi, I have a 3BHK in Kothrud.\n\n AGENT: Lovely."
         fields = {**t01_fields(), "caller_phone": "+919876543210", "caller_email": "Priya.K@Gmail.com"}
         with mock.patch.object(actions, "extract_fields", return_value={"fields": fields, "usage": {}}) as ext:
@@ -635,6 +637,21 @@ class WebCalls(Base):
         self.assertEqual(row["summary"], "Caller wants a 2BHK in Wakad redone.")
         page = wsgi("GET", f"/dashboard/call?call_id={self.ROOM}&token=dash_test")[1]
         self.assertIn("Priya", page)
+
+    def test_web_call_waits_for_settled_usable_transcript(self):
+        self.post("/api/webcall/start", {})
+        with mock.patch.object(actions, "process_completed_call") as proc:
+            status, out = self.post("/api/webcall/end", {"room": self.ROOM, "seconds": 0})
+            self.assertEqual(json.loads(out), {"done": False})
+            self.assertGreaterEqual(self.store.get_call(self.ROOM)["duration_sec"], 0)
+            self.assertFalse(proc.called)
+
+            self.transcript = "speaker text without labels"
+            old_end = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+            self.store.update_call(self.ROOM, {"ended_at": old_end})
+            out = json.loads(wsgi("GET", f"/api/webcall/status?room={self.ROOM}")[1])
+            self.assertEqual(out, {"done": False})
+            self.assertFalse(proc.called)
 
     def test_limits_and_bad_rooms(self):
         for _ in range(6):
