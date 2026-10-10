@@ -405,6 +405,8 @@ _ICON_PATHS = {
     "x": "M6 6l12 12M18 6L6 18",
     "info": "M12 8h.01M11 12h1v5h1M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z",
     "moon": "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z",
+    "clock": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
+    "archive": "M3 4h18v4H3zM5 8v12h14V8M10 12h4",
 }
 
 
@@ -502,7 +504,17 @@ box-shadow:0 8px 28px rgba(0,0,0,.2);animation:toast 5s ease forwards;max-width:
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 a.stat{text-decoration:none;display:block;transition:border-color .15s}
 a.stat:hover{border-color:var(--axis)}
-.stat .label{color:var(--text-secondary);font-size:13.5px;display:flex;align-items:center;gap:7px}
+.stat .label{color:var(--text-secondary);font-size:13.5px;display:flex;align-items:center;gap:9px}
+.sicon{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;color:var(--c);flex:none;
+background:color-mix(in srgb,var(--c) 14%,transparent)}
+.card.hello{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);padding:0!important;overflow:hidden;margin-bottom:16px}
+.hello-text{padding:26px 28px}.hello .actions{margin-top:16px}
+.hello-photo{position:relative;min-height:190px;background:#e9e3da center/cover no-repeat}
+.credit{position:absolute;right:12px;bottom:8px;font-size:11px;color:rgba(255,255,255,.85);text-decoration:none;
+text-shadow:0 1px 2px rgba(0,0,0,.5);z-index:1}.credit:hover{text-decoration:underline}
+.hello-photo::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,var(--surface-1),transparent 28%)}
+@media (max-width:760px){.hello{grid-template-columns:1fr}.hello-photo{min-height:120px;order:-1}
+.hello-photo::before{background:linear-gradient(0deg,var(--surface-1),transparent 40%)}.hello-text{padding:18px}}
 .stat .num{font-size:34px;font-weight:650;line-height:1.1;margin:6px 0 4px;letter-spacing:-.02em}
 .stat .note{font-size:12.5px;color:var(--muted)}
 .key{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:-1px}
@@ -799,9 +811,41 @@ def _page(title: str, body: str, token: str, active: str | None = None, period: 
 </div></main>{toast}<script>{JS}</script></body></html>"""
 
 
+# Free Unsplash photos (unsplash.com/license), hotlinked as Unsplash asks, always credited on the page.
+# Customer-facing pages use a photographer's photo; another studio's work appears only on the internal sign-in page.
+# Swap these for Aangan's own project photos whenever they're available.
+PHOTOS = {
+    "call": ("https://images.unsplash.com/photo-1713192706955-6ef5c71811bd", "Sanju Pandita",
+             "https://unsplash.com/photos/a-living-room-filled-with-furniture-and-a-large-window-nk30CNCBA3s"),
+    "home": ("https://images.unsplash.com/photo-1713192707656-11e779929375", "Sanju Pandita",
+             "https://unsplash.com/photos/a-living-room-filled-with-furniture-and-a-ceiling-fan-c14mTWtAKAQ"),
+    "signin": ("https://images.unsplash.com/photo-1787390629829-abb32b3025c5", "SHHOONYA The Design Studio",
+               "https://unsplash.com/photos/living-room-with-beige-sofas-15cXFq_G5IU"),
+}
+
+
+def photo_url(key: str, width: int) -> str:
+    return f"{PHOTOS[key][0]}?w={width}&q=72&auto=format&fit=crop"
+
+
+def photo_credit(key: str) -> str:
+    _, who, page = PHOTOS[key]
+    return (f"<a class='credit' href='{e(page)}?utm_source=aangan&utm_medium=referral' target='_blank' rel='noopener'>"
+            f"Photo: {e(who)} / Unsplash</a>")
+
+
 LOGIN_CSS = """
-.login{min-height:100vh;display:grid;place-items:center;padding:24px 16px}
+.login{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(360px,1fr)}
+.login .side{position:relative;background:#2b2420 center/cover no-repeat;display:flex;align-items:flex-end;padding:40px;min-height:100vh}
+.login .side::before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,14,10,.05) 30%,rgba(20,14,10,.72))}
+.login .side .words{position:relative;color:#fff;max-width:440px}
+.login .side .words b{display:block;font-size:30px;line-height:1.2;letter-spacing:-.015em;margin-bottom:10px}
+.login .side .words span{font-size:15.5px;opacity:.88;line-height:1.5}
+.login .credit{color:rgba(255,255,255,.8)!important;font-weight:400!important}
+.login .formside{display:grid;place-items:center;padding:32px 16px}
 .login .card{width:100%;max-width:400px;padding:28px}
+@media (max-width:860px){.login{grid-template-columns:1fr}.login .side{min-height:200px;padding:22px}
+.login .side .words b{font-size:22px}.login .side .words span{display:none}}
 .login .brand{margin-bottom:22px}
 .login label{display:block;font-size:14px;font-weight:600;margin:16px 0 6px}
 .login input[type=password],.login input[type=email],.login input[type=text]{width:100%;border:1px solid var(--border);
@@ -822,9 +866,13 @@ def _auth_page(title: str, body: str) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <link rel="icon" href="{FAVICON}"><title>{e(title)} · Aangan</title><style>{CSS}{LOGIN_CSS}</style></head>
-<body class="viz-root"><main class="login"><div class="card">
+<body class="viz-root"><main class="login">
+<div class="side" style="background-image:url('{photo_url('signin', 1400)}')" role="img" aria-label="A warm, sunlit living room">
+<div class="words"><b>Every enquiry answered, day or night.</b><span>Calls, bookings and follow-ups for the Aangan Studio
+team, all in one place.</span></div>{photo_credit('signin')}</div>
+<div class="formside"><div class="card">
 <div class="brand"><span class="mark">A</span><span><b>Aangan Studio</b><small>Phone enquiries dashboard</small></span></div>
-{body}</div></main></body></html>"""
+{body}</div></div></main></body></html>"""
 
 
 def render_login(next_path: str = "/dashboard", mode: str = "account", error: str | bool | None = None,
@@ -963,7 +1011,19 @@ def _day_label(d, today):
 
 
 def _greeting(now):
-    return "Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 17 else "Good evening"
+    hello = "Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 17 else "Good evening"
+    first = (_viewer_name() or "").split(" ")[0]
+    return f"{hello}, {first}" if first and "@" not in first else hello
+
+
+def _hello(now, headline: str) -> str:
+    """Home's greeting: the day in one sentence, the web call button, and a warm interior photo."""
+    return (f"<section class='card hello'><div class='hello-text'><h1>{e(_greeting(now))}</h1>"
+            f"<p class='headline'>{headline}</p><div class='actions'>"
+            f"<a class='btn primary' href='/call' target='_blank' rel='noopener' title='Opens the page callers use'>"
+            f"{_icon('phone')}Start a web call</a></div></div>"
+            f"<div class='hello-photo' style=\"background-image:url('{photo_url('home', 900)}')\" role='img' "
+            f"aria-label='A bright living room with arched doorways'>{photo_credit('home')}</div></section>")
 
 
 # --- shared pieces ---------------------------------------------------------------------------------
@@ -1032,8 +1092,7 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
                   f"<a class='link' href='{e(_q('/dashboard/setup', token))}'>Finish setup {_icon('arrow')}</a></div>")
 
     if not m["ever"]:
-        body = (f"<div class='pagehead'><div><h1>{_greeting(now)}</h1><p class='headline'>Welcome. This is where every call "
-                f"to the studio shows up.</p></div></div>{banner}"
+        body = (f"{_hello(now, 'Welcome. This is where every call to the studio shows up.')}{banner}"
                 f"<div class='card emptybig'><div class='ok'>{_icon('phone', 22)}</div><h2>No calls yet</h2>"
                 f"<p class='sub' style='max-width:480px;margin:8px auto 16px'>Callers talk to the agent from the web call page. "
                 f"Each call appears here about a minute after it ends: who called, what they want, and whether a consultation "
@@ -1051,17 +1110,19 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
         headline += " Nothing is waiting on you."
 
     g = m["groups"]
+    chip = lambda icon, color: f"<span class='sicon' style='--c:{color}' aria-hidden='true'>{_icon(icon, 18)}</span>"  # noqa: E731
     stats = "".join(
         f"<a class='card stat' href='{e(_q('/dashboard/calls', token, period=period, group=grp))}'>"
         f"<div class='label'>{key}{e(label)}</div><div class='num'>{num}</div><div class='note'>{note}</div></a>"
         for grp, key, label, num, note in (
-            ("all", "", "Calls answered", m["answered"], _delta(m["answered"], prev and prev["answered"], vs=vs) or e(f"{m['after_hours']} after hours")),
-            ("booked", f"<span class='key' style='background:{GROUP_COLOR['booked']}'></span>", "Consultations booked",
+            ("all", chip("phone", "var(--brand)"), "Calls answered", m["answered"],
+             _delta(m["answered"], prev and prev["answered"], vs=vs) or e(f"{m['after_hours']} after hours")),
+            ("booked", chip("check", GROUP_COLOR["booked"]), "Consultations booked",
              m["booked_any"], _delta(m["booked_any"], prev and prev["booked_any"], vs=vs)
              or e(f"{m['booked_on_call']} booked during the call itself")),
-            ("follow_up", f"<span class='key' style='background:{GROUP_COLOR['follow_up']}'></span>", "Need a follow-up",
+            ("follow_up", chip("clock", GROUP_COLOR["follow_up"]), "Need a follow-up",
              g["follow_up"], e(GROUP_HINT["follow_up"])),
-            ("closed", f"<span class='key' style='background:{GROUP_COLOR['closed']}'></span>", "Closed", g["closed"],
+            ("closed", chip("archive", GROUP_COLOR["closed"]), "Closed", g["closed"],
              e(GROUP_HINT["closed"])),
         ))
 
@@ -1078,9 +1139,7 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
     recent = "".join(_call_item(c, token, now, show_day=True) for c in m["rows"][:6]) or "<li class='empty'>No calls in this period.</li>"
     top_reasons = "".join(f"<li style='display:flex;justify-content:space-between;padding:6px 0'><span>{e(REASON_SHORT.get(r, r))}</span>"
                           f"<b>{n}</b></li>" for r, n in sorted(m["reasons"], key=lambda x: -x[1])[:3])
-    body = (f"<div class='pagehead'><div><h1>{_greeting(now)}</h1><p class='headline'>{headline}</p></div>"
-            f"<a class='btn' href='/call' target='_blank' rel='noopener' title='Opens the page callers use'>{_icon('phone')}"
-            f"Start a web call</a></div>{banner}"
+    body = (f"{_hello(now, headline)}{banner}"
             f"<div class='stats'>{stats}</div>"
             f"<div class='grid2'><div class='card'><div class='cardhead'><div><h2>Your to-do list</h2>"
             f"<p class='sub'>Callers someone at the studio should get back to (last 7 days)</p></div></div>{todo_html}</div>"

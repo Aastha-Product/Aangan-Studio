@@ -114,7 +114,11 @@ LIVEKIT_JS = "https://cdn.jsdelivr.net/npm/livekit-client@2.18.10/dist/livekit-c
 
 PAGE_CSS = """
 .callpage{min-height:100vh;display:grid;place-items:center;padding:24px 16px}
-.callcard{width:100%;max-width:460px;padding:30px;text-align:center}
+.callcard{width:100%;max-width:480px;padding:30px;text-align:center;overflow:hidden}
+.callphoto{position:relative;margin:-30px -30px 22px;height:210px;background:#e9e3da center/cover no-repeat}
+.callphoto::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.28))}
+@media (max-width:520px){.callphoto{height:160px}}
+.callcard .btn.primary{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
 .callcard .brand{justify-content:center;margin-bottom:22px}
 .callcard h1{font-size:26px}
 .callcard .lead{color:var(--text-secondary);font-size:15.5px;line-height:1.55;margin:10px 0 22px}
@@ -228,14 +232,17 @@ PAGE_JS = """
 
 
 def render_page() -> str:
-    from .dashboard import CSS, FAVICON, _icon
+    from .dashboard import CSS, FAVICON, _icon, photo_credit, photo_url
     phone = _icon("phone", 20)
+    photo = (f"<div class=\"callphoto\" style=\"background-image:url('{photo_url('call', 960)}')\" role=\"img\" "
+             f"aria-label=\"A bright, sunlit living room with wooden furniture and plants\">{photo_credit('call')}</div>")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="{FAVICON}"><title>Talk to Aangan Studio</title>
 <meta name="description" content="Talk to Aangan Studio's assistant about designing your home or office in Pune, any time.">
 <style>{CSS}{PAGE_CSS}</style></head>
 <body class="viz-root"><main class="callpage"><div class="card callcard">
+{photo}
 <div class="brand"><span class="mark">A</span><span style="text-align:left"><b>Aangan Studio</b><small>Interior design · Pune</small></span></div>
 
 <section id="v-start">
