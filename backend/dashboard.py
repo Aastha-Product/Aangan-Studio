@@ -1118,18 +1118,17 @@ def setup_status(store, now: datetime | None = None) -> list[dict]:
         "setting": "VAANI_WEBHOOK_SECRET (webhook address: /api/vaani/webhook?key=…)"})
 
     provider = config.BOOKING_PROVIDER
-    has_type = bool(config.CALCOM_EVENT_TYPE_ID if provider == "calcom" else config.CALENDLY_EVENT_TYPE_URI)
     out.append({
-        "name": "Booking calendar", "state": "ok" if has_type and cal else "warn" if has_type else "no",
-        "what": ("The agent can book consultations, and bookings are flowing back here. "
-                 f"Last booking update: {when(cal_t)}." if has_type and cal else
-                 "The agent can offer slots, but no booking has come back from the calendar yet." if has_type else
-                 "The agent can't offer or book consultation slots yet, so good-fit callers get a call back instead."),
-        "fix": None if has_type and cal else [
+        "name": "Booking calendar", "state": "ok" if cal else "no",
+        "what": ("The agent books consultations on the call, and bookings are flowing back here. "
+                 f"Last booking update: {when(cal_t)}." if cal else
+                 "No booking has come back from the calendar yet. Until the agent can book, good-fit callers get "
+                 "a call back from the front desk instead."),
+        "fix": None if cal else [
             "Create the \"Aangan Design Consultation\" event in Cal.com (site visit or studio, 60 minutes).",
-            "Set the real consultation hours and connect the designers' calendars.",
-            "Register this app's booking webhook in Cal.com."] if not has_type else [
-            "Make one test booking and check it appears on that call's page."],
+            "In Vaani → Settings → Integrations → Cal.com, connect Cal.com and pick that event.",
+            "Register this app's booking webhook in Cal.com.",
+            "Make one test booking on a call and check it appears on that call's page."],
         "setting": "CALCOM_EVENT_TYPE_ID, CALCOM_WEBHOOK_SECRET" if provider == "calcom" else
                    "CALENDLY_EVENT_TYPE_URI, CALENDLY_WEBHOOK_SIGNING_KEY"})
 

@@ -90,6 +90,11 @@ def sign(raw_body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
 
 
+def _response_value(r):
+    """Cal.com booking-form answers come as {"value": …} or a bare value."""
+    return r.get("value") if isinstance(r, dict) else r
+
+
 def booking_from_payload(trigger: str, p: dict) -> dict:
     """Normalise a Cal.com webhook payload into the shared booking shape (see actions.apply_booking_event)."""
     if trigger == "BOOKING_NO_SHOW_UPDATED":
@@ -101,7 +106,20 @@ def booking_from_payload(trigger: str, p: dict) -> dict:
     att = (p.get("attendees") or [{}])[0]
     meta = p.get("metadata") or {}
     old = p.get("rescheduleUid")
+    responses = p.get("responses") or {}
+    phone = att.get("phoneNumber") or _response_value(responses.get("attendeePhoneNumber"))
+    # Where the consultation is: the caller's address = site visit; the event's own address = the studio.
+    loc = responses.get("location") or {}
+    loc_type = (loc.get("value") if isinstance(loc.get("value"), str) else "") if isinstance(loc, dict) else ""
+    visit_type, site_address = None, None
+    if loc_type == "attendeeAddress":
+        visit_type, site_address = "site_visit", (loc.get("optionValue") if isinstance(loc, dict) else None) or p.get("location")
+    elif loc_type in ("inPerson", "address"):
+        visit_type = "studio"
     return {
+        "invitee_phone": phone,
+        "visit_type": visit_type,
+        "site_address": site_address,
         "call_id": meta.get("call_id"),
         "ref": f"calcom:{uid}" if uid else None,
         "old_ref": f"calcom:{old}" if old else None,

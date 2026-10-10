@@ -96,6 +96,11 @@ def process_completed_call(store, call_id: str, transcript: str, started_at: dat
     usage = dict(row.get("usage") or {})
     usage["gemini"] = record["usage"]
     status = _status_for(res.decision, row.get("status"))
+    if row.get("status") == "booked" and res.decision != "Qualified":
+        # The calendar already holds the slot (booked live on the call). Keep it, and tell the designer why to look.
+        status = "booked"
+        res.flags.insert(0, f"⚠ Booked on the call, but the five checks say {res.decision}"
+                            f"{' (' + res.reason_code + ')' if res.reason_code else ''}. Review before the consultation")
     changes = {
         "call_id": call_id, "transcript": transcript, "fields": record["fields"],
         "caller_name": row.get("caller_name") or record["fields"].get("caller_name"),
@@ -155,6 +160,46 @@ def _find_booking_row(store, b: dict) -> dict | None:
     return None
 
 
+def _digits(s) -> str:
+    return "".join(ch for ch in str(s or "") if ch.isdigit())[-10:]
+
+
+def _during_call(row: dict) -> bool:
+    if not row.get("started_at") or row.get("call_id", "").startswith(("calcom-", "calendly-")):
+        return False
+    end = parse_time(row["ended_at"]) if row.get("ended_at") else None
+    now = datetime.now(timezone.utc)
+    return end is None or now - end <= timedelta(minutes=5)
+
+
+def match_recent_call(store, b: dict, now: datetime | None = None) -> tuple[dict | None, str]:
+    """A booking made by Vaani's own Cal.com tool carries no call id. Find the call it came from:
+    same phone number, else the same first name, else the only call in progress. Never guess between two."""
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(hours=2)).isoformat(timespec="seconds")
+    open_calls = [c for c in store.list_calls(since)
+                  if not str(c.get("call_id", "")).startswith(("calcom-", "calendly-"))
+                  and c.get("status") not in ("booked", "cancelled", "no_show")
+                  and c.get("decision") in (None, "Qualified")]
+    latest = lambda cs: max(cs, key=lambda c: c.get("started_at") or c.get("created_at") or "")  # noqa: E731
+    phone = _digits(b.get("invitee_phone"))
+    if len(phone) == 10:
+        hits = [c for c in open_calls if _digits(c.get("caller_number")) == phone]
+        if hits:
+            return latest(hits), "phone number"
+    first = (b.get("invitee_name") or "").strip().split(" ")[0].lower()
+    if len(first) >= 3:
+        hits = [c for c in open_calls if first in (c.get("caller_name") or "").lower().split()]
+        if len(hits) == 1:
+            return hits[0], "caller name"
+    recent = [c for c in open_calls
+              if (parse_time(c.get("started_at") or c.get("created_at")) if (c.get("started_at") or c.get("created_at"))
+                  else now) >= now - timedelta(minutes=45)]
+    if len(recent) == 1:
+        return recent[0], "only call in progress"
+    return None, ""
+
+
 def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
     """kind: created | rescheduled | cancelled | no_show | no_show_cleared."""
     row = _find_booking_row(store, b)
@@ -172,9 +217,14 @@ def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
         return kind
 
     if kind in ("created", "rescheduled"):
+        if not row and not b.get("old_ref"):   # booked by Vaani's own calendar tool: find the call it came from
+            row, how = match_recent_call(store, b)
+            if row:
+                store.log_event(row["call_id"], "booking_matched", {"by": how, "ref": b.get("ref")})
         if not row:  # booked directly on the calendar page, not via the agent
             row = store.upsert_call({"call_id": f"{source}-{(b.get('ref') or '').rsplit('/', 1)[-1].replace(':', '-')}",
-                                     "status": "booked", "caller_name": b.get("invitee_name")})
+                                     "status": "booked", "caller_name": b.get("invitee_name"),
+                                     "caller_number": b.get("invitee_phone")})
         is_reschedule = kind == "rescheduled" or bool(b.get("old_ref")) or bool(row.get("report_card_sent_at"))
         row = store.update_call(row["call_id"], {
             "status": "booked", "slot_start": b.get("slot_start"), "event_uri": b.get("event"),
@@ -183,7 +233,11 @@ def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
             "designer_email": b.get("designer_email") or row.get("designer_email"),
             "designer_name": b.get("designer_name") or row.get("designer_name"),
             "cancel_url": b.get("cancel_url"), "reschedule_url": b.get("reschedule_url"),
-            "booked_at": row.get("booked_at") or utcnow(),
+            "booked_at": row.get("booked_at") or utcnow(), "booking_provider": source,
+            "visit_type": b.get("visit_type") or row.get("visit_type"),
+            "site_address": b.get("site_address") or row.get("site_address"),
+            # booked while the caller was still on the line (Vaani's calendar tool) or within minutes of hanging up
+            "booked_on_call": row.get("booked_on_call") or _during_call(row),
         })
         if is_reschedule:
             s, t = emails.time_changed(row)

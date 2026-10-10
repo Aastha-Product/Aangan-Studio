@@ -148,6 +148,65 @@ class Webhooks(CalcomBase):
         self._post("BOOKING_CREATED", self._booking())                       # redelivery
         self.assertEqual(len([e for e in self.http.emails() if "Consultation" in e["subject"]]), 1)
 
+    def _live_call(self, call_id, number, name=None, minutes_ago=3):
+        from datetime import timedelta
+        started = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        self.store.upsert_call({"call_id": call_id, "caller_number": number, "caller_name": name,
+                                "started_at": started.isoformat(), "answered": True})
+
+    def _vaani_booking(self, **attendee):
+        """What Vaani's own Cal.com tool books: no call id in the metadata."""
+        return self._booking(uid="bk_vaani1", metadata={},
+                             attendees=[{"name": "Priya Kulkarni", "email": "priya.k@gmail.com", "timeZone": "Asia/Kolkata",
+                                         **attendee}],
+                             responses={"location": {"value": "attendeeAddress", "optionValue": "Flat 302, Kothrud"}})
+
+    def test_vaani_booking_matched_by_phone_then_report_card_after_the_call(self):
+        self._live_call("v-other", "+919800000001")
+        self._live_call("v-priya", "+91 98111 11111")
+        self._post("BOOKING_CREATED", self._vaani_booking(phoneNumber="+919811111111"))
+        row = self.store.get_call("v-priya")
+        self.assertEqual((row["status"], row["visit_type"], row["site_address"], row["booked_on_call"]),
+                         ("booked", "site_visit", "Flat 302, Kothrud", True))
+        self.assertEqual(self.store.find_call("invitee_uri", "calcom:bk_vaani1")["call_id"], "v-priya")  # no orphan row
+        self.assertTrue(any(e["kind"] == "booking_matched" and e["payload"]["by"] == "phone number"
+                            for e in self.store.list_call_events("v-priya")))
+        self.assertEqual(self.http.emails(), [])                              # not qualified yet: no card
+        # the call ends; qualification runs and the report card goes out
+        from backend import actions
+        with mock.patch.object(actions, "extract_fields", return_value={"fields": t01_fields(), "usage": {}}):
+            actions.process_completed_call(self.store, "v-priya", T01)
+        row = self.store.get_call("v-priya")
+        self.assertEqual(row["status"], "booked")
+        self.assertTrue(row["report_card_sent_at"])
+        self.assertFalse(any("Confirm a consultation slot" in e["subject"] for e in self.http.emails()))
+
+    def test_vaani_booking_matched_as_only_call_in_progress(self):
+        self._live_call("v-only", "+919822222222")
+        self._live_call("v-old", "+919833333333", minutes_ago=90)
+        self._post("BOOKING_CREATED", self._vaani_booking())
+        self.assertEqual(self.store.get_call("v-only")["status"], "booked")
+
+    def test_vaani_booking_not_guessed_between_two_live_calls(self):
+        self._live_call("v-a", "+919844444444")
+        self._live_call("v-b", "+919855555555")
+        self._post("BOOKING_CREATED", self._vaani_booking())
+        self.assertNotEqual(self.store.get_call("v-a").get("status"), "booked")
+        self.assertNotEqual(self.store.get_call("v-b").get("status"), "booked")
+        orphan = self.store.find_call("invitee_uri", "calcom:bk_vaani1")
+        self.assertEqual((orphan["status"], orphan["call_id"].startswith("calcom-")), ("booked", True))
+
+    def test_booked_caller_who_fails_the_checks_stays_booked_with_a_warning(self):
+        self._live_call("v-nashik", "+919866666666")
+        self._post("BOOKING_CREATED", self._vaani_booking(phoneNumber="+919866666666"))
+        from backend import actions
+        nashik = {**t01_fields(), "location_text": "Nashik", "location_city": "other_city", "location_quote": "Nashik"}
+        with mock.patch.object(actions, "extract_fields", return_value={"fields": nashik, "usage": {}}):
+            actions.process_completed_call(self.store, "v-nashik", T01)
+        row = self.store.get_call("v-nashik")
+        self.assertEqual((row["status"], row["decision"]), ("booked", "Not qualified"))
+        self.assertTrue(row["flags"][0].startswith("⚠ Booked on the call, but the five checks say Not qualified"))
+
     def test_reschedule_cancel_no_show(self):
         self._qualified_row()
         self._post("BOOKING_CREATED", self._booking())
