@@ -25,6 +25,16 @@ def valid_room(room: str) -> bool:
     return bool(room and ROOM_RE.match(room))
 
 
+REF_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"        # no 0/o/1/l/i: easy for the agent to copy exactly
+
+
+def new_call_ref() -> str:
+    """A short one-time reference for one call (~1e11 combinations). Whoever holds it can use the booking tools
+    for that call only, for a limited time, so the tools need no shared secret."""
+    import secrets
+    return "".join(secrets.choice(REF_ALPHABET) for _ in range(8))
+
+
 def start(store, ip: str, name: str = "") -> tuple[str, dict]:
     if not (config.VAANI_API_KEY and config.env("VAANI_AGENT_ID")):
         return "503 Service Unavailable", {"error": "Web calls aren't available right now. Please try again later."}
@@ -35,13 +45,14 @@ def start(store, ip: str, name: str = "") -> tuple[str, dict]:
     if store.event_stats("webcall_started", (now - timedelta(days=1)).isoformat(timespec="seconds"))[0] >= PER_DAY:
         return "429 Too Many Requests", {"error": "We're getting a lot of calls today. Please try again tomorrow."}
     name = re.sub(r"\s+", " ", name or "").strip()[:60]
-    r = vaani.start_web_call(name or "Website caller")
+    ref = new_call_ref()
+    r = vaani.start_web_call(name or "Website caller", ref)
     room = r.get("room_name") or ""
     if not valid_room(room) or not r.get("token") or not r.get("connection_url"):
         return "502 Bad Gateway", {"error": "The call couldn't be started. Please try again."}
     store.record_auth_failure(key)          # counts towards the per-address limit
     store.upsert_call({"call_id": room, "channel": "web", "caller_name": name or None, "started_at": utcnow(),
-                       "answered_at": utcnow(), "answered": True})
+                       "answered_at": utcnow(), "answered": True, "call_ref": ref})
     store.log_event(room, "webcall_started", {"from": key})
     return "200 OK", {"room": room, "url": r["connection_url"], "token": r["token"]}
 

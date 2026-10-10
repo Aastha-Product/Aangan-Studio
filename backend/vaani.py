@@ -55,10 +55,13 @@ def set_inbound_number(agent_id: str, number: str) -> dict:
 # POST /api/trigger-call/ {medium: "webrtc"} -> {token, room_name, connection_url, live_captions_url}
 # (checked live 10 Oct 2026: a LiveKit room token for "Web User", valid 6 hours). The room name is the call id.
 
-def start_web_call(name: str = "Website caller") -> dict:
-    return request_json("POST", f"{API}/api/trigger-call/", _h(),
-                        {"agent_id": config.env("VAANI_AGENT_ID"), "medium": "webrtc", "name": name[:60] or "Website caller",
-                         "voice_gender": "female", "primary_language": "en", "secondary_language": "hi"})
+def start_web_call(name: str = "Website caller", call_ref: str | None = None) -> dict:
+    """`call_ref` goes in as metadata: Vaani fills it into the agent's instructions where they say {call_ref}."""
+    body = {"agent_id": config.env("VAANI_AGENT_ID"), "medium": "webrtc", "name": name[:60] or "Website caller",
+            "voice_gender": "female", "primary_language": "en", "secondary_language": "hi"}
+    if call_ref:
+        body["metadata"] = {"call_ref": call_ref}
+    return request_json("POST", f"{API}/api/trigger-call/", _h(), body)
 
 
 def get_transcript(call_id: str) -> str | None:

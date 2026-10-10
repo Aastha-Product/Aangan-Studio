@@ -579,8 +579,8 @@ class WebCalls(Base):
             self.patches.append(p)
         self.started = []
         self.transcript = None
-        fake_start = lambda name: (self.started.append(name) or  # noqa: E731
-                                   {"token": "jwt", "room_name": self.ROOM, "connection_url": "https://server.vaanivoice.ai"})
+        fake_start = lambda name, ref=None: (self.started.append((name, ref)) or  # noqa: E731
+                                             {"token": "jwt", "room_name": self.ROOM, "connection_url": "https://server.vaanivoice.ai"})
         for p in (mock.patch.object(vaani, "start_web_call", side_effect=fake_start),
                   mock.patch.object(vaani, "get_transcript", side_effect=lambda room: self.transcript),
                   mock.patch.object(vaani, "get_summary", return_value="Caller wants a 2BHK in Wakad redone.")):

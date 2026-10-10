@@ -126,6 +126,8 @@ alter table auth_attempts enable row level security;
 alter table app_settings enable row level security;
 
 alter table calls add column if not exists channel text;             -- web (browser call) | phone
+alter table calls add column if not exists call_ref text;            -- one-time reference the agent passes to the booking tools
+create index if not exists calls_call_ref_idx on calls (call_ref);
 alter table calls add column if not exists handled_at timestamptz;   -- follow-up done (dashboard "Mark as done")
 alter table calls add column if not exists handled_by text;
 alter table calls add column if not exists handled_note text;

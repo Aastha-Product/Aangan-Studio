@@ -15,6 +15,7 @@ GET  /dashboard/export.csv   the period's calls as a spreadsheet
 POST /api/admin/migrate     create/update the Neon tables once (Bearer CRON_SECRET)
 GET  /call                   public "Talk to Aangan Studio" page: web call with the agent (no phone number)
 POST /api/webcall/start|end  GET /api/webcall/status   (backend/webcall.py)
+POST /api/tools/slots|book|pending   booking tools the agent calls mid-call, keyed by the call's one-time ref (webtools.py)
 GET  /api/health
 """
 import hmac
@@ -25,7 +26,7 @@ import urllib.parse
 from datetime import timedelta
 from http.cookies import SimpleCookie
 
-from . import actions, auth, calcom, calendly, config, dashboard, digest, emails, vaani, webcall
+from . import actions, auth, calcom, calendly, config, dashboard, digest, emails, vaani, webcall, webtools
 from .store import default_store, utcnow
 
 _store = None
@@ -159,6 +160,11 @@ def app(environ, start_response):
 
         if path in ("/dashboard/login", "/dashboard/signup", "/dashboard/logout"):
             return _auth_route(start_response, store, environ, path, method, query, raw)
+
+        # --- booking tools the Vaani agent calls during a web call (guarded by the call's own one-time reference) ---
+        if path.startswith("/api/tools/") and method in ("POST", "GET"):
+            status, out = webtools.handle(store, path.rsplit("/", 1)[-1], webtools.parse_params(raw, query))
+            return _resp(start_response, status, out)
 
         # --- web calls (public: this is where callers talk to the agent) ---
         if path == "/call":

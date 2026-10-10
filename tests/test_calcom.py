@@ -1,7 +1,7 @@
 """Cal.com booking provider: slots, booking on the call, webhooks — offline, payloads from Cal.com's docs."""
 import json
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from backend import agent, calcom, config
@@ -107,6 +107,104 @@ class BookingOnTheCall(CalcomBase):
         s.caller_says("Book it")
         result = json.loads(self.claude.requests[1]["messages"][-1]["content"][0]["content"])
         self.assertEqual(result["reason"], "slot_taken")
+
+
+class WebTools(CalcomBase):
+    """The booking tools Vaani's agent calls mid-call, guarded by each web call's own one-time reference."""
+    ROOM, REF = "webrtc-1791629640-a0bc13a4", "k7m2x9pq"
+
+    def setUp(self):
+        super().setUp()
+        self.store.upsert_call({"call_id": self.ROOM, "channel": "web", "call_ref": self.REF,
+                                "started_at": datetime.now(timezone.utc).isoformat(), "answered": True})
+
+    def tool(self, name, body, raw=None):
+        data = raw if raw is not None else json.dumps(body).encode()
+        status, out = wsgi("POST", f"/api/tools/{name}", data, {"CONTENT_TYPE": "application/json"})
+        return status, json.loads(out)
+
+    def book_args(self, **kw):
+        return {"call_ref": self.REF, "slot_id": "2026-10-12T05:30:00Z", "full_name": "Priya Kulkarni",
+                "email": "priya.k@gmail.com", "visit_type": "site_visit", "phone": "98111 11111",
+                "site_address": "Flat 302, Dahanukar Colony, Kothrud", **kw}
+
+    def test_unknown_or_old_reference_does_nothing(self):
+        for ref in ("zzzzzzzz", "", "short"):
+            status, out = self.tool("book", self.book_args(call_ref=ref))
+            self.assertEqual((status[:3], out["ok"], out["reason"]), ("200", False, "unknown_call"))
+        self.assertEqual(self.cal.cal("/v2/bookings"), [])                       # nothing was booked
+        self.store.update_call(self.ROOM, {"started_at": (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()})
+        self.assertEqual(self.tool("book", self.book_args())[1]["reason"], "unknown_call")   # too old
+        self.store.update_call(self.ROOM, {"started_at": datetime.now(timezone.utc).isoformat(),
+                                           "processed_at": "2026-10-10T10:00:00+00:00"})
+        self.assertEqual(self.tool("slots", {"call_ref": self.REF})[1]["reason"], "unknown_call")  # call already finished
+        self.assertEqual(self.tool("nope", {})[0][:3], "404")
+
+    def test_slots_then_book_a_site_visit(self):
+        status, out = self.tool("slots", {"call_ref": self.REF.upper()})          # the reference is case-insensitive
+        self.assertTrue(out["ok"])
+        self.assertEqual([o["option"] for o in out["slots"]], [1, 2, 3])
+        self.assertIn("Monday 12 October, 11 am", out["say"])
+        status, out = self.tool("book", self.book_args())
+        self.assertTrue(out["ok"], out)
+        self.assertIn("Monday 12 October, 11 am", out["spoken_confirmation"])
+        _, _, headers, body = self.cal.cal("/v2/bookings")[0]
+        self.assertEqual(body["metadata"]["call_id"], self.ROOM)                  # so the webhook finds the call
+        self.assertEqual(body["attendee"]["phoneNumber"], "+9198111 11111".replace(" ", ""))
+        self.assertEqual(body["location"], {"type": "attendeeAddress", "address": "Flat 302, Dahanukar Colony, Kothrud"})
+        row = self.store.get_call(self.ROOM)
+        self.assertEqual((row["status"], row["booked_on_call"], row["caller_number"], row["invitee_uri"]),
+                         ("booked", True, "+9198111 11111".replace(" ", ""), "calcom:bk_abc123"))
+        kinds = [e["kind"] for e in self.store.list_call_events(self.ROOM)]
+        self.assertEqual(kinds.count("tool_call"), 2)
+        # a second booking for the same call is refused
+        self.assertEqual(self.tool("book", self.book_args())[1]["reason"], "already_booked")
+
+    def test_book_by_option_number_and_studio_visit(self):
+        self.tool("slots", {"call_ref": self.REF})
+        status, out = self.tool("book", self.book_args(slot_id="2", visit_type="at the studio", site_address=""))
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(self.cal.cal("/v2/bookings")[0][3]["start"], "2026-10-12T10:30:00Z")   # option 2 = 4 pm IST
+        self.assertEqual(self.cal.cal("/v2/bookings")[0][3]["location"], {"type": "address"})
+
+    def test_mistakes_are_caught_before_calling_the_calendar(self):
+        for kw, reason in (({"email": "priya"}, "invalid_email"), ({"full_name": ""}, "need_name"),
+                           ({"visit_type": "maybe"}, "need_visit_type"), ({"site_address": ""}, "need_address"),
+                           ({"slot_id": "next tuesday"}, "unknown_slot")):
+            out = self.tool("book", self.book_args(**kw))[1]
+            self.assertEqual((out["ok"], out["reason"]), (False, reason))
+            self.assertTrue(out["say"])
+        self.assertEqual(self.cal.cal("/v2/bookings"), [])
+
+    def test_calendar_failure_and_pending(self):
+        self.cal.book_status = 400
+        out = self.tool("book", self.book_args())[1]
+        self.assertEqual((out["ok"], out["reason"]), (False, "slot_taken"))
+        out = self.tool("pending", {"call_ref": self.REF, "reason": "caller prefers a callback"})[1]
+        self.assertTrue(out["ok"])
+        self.assertEqual(self.store.get_call(self.ROOM)["status"], "booking_pending")
+        self.assertTrue(any(e["subject"].startswith("Front desk") for e in self.http.emails()))
+
+    def test_parameters_can_arrive_wrapped_in_json_or_as_a_form(self):
+        wrapped = json.dumps({"tool": "get_open_slots", "parameters": {"call_ref": self.REF, "preference": "afternoon"}}).encode()
+        out = self.tool("slots", None, raw=wrapped)[1]
+        self.assertEqual([o["label"] for o in out["slots"]], ["Monday 12 October, 4 pm"])
+        status, text = wsgi("POST", "/api/tools/slots", f"call_ref={self.REF}".encode(),
+                            {"CONTENT_TYPE": "application/x-www-form-urlencoded"})
+        self.assertTrue(json.loads(text)["ok"])
+        status, text = wsgi("GET", f"/api/tools/slots?call_ref={self.REF}")
+        self.assertTrue(json.loads(text)["ok"])
+
+    def test_starting_a_web_call_creates_the_reference_and_hands_it_to_vaani(self):
+        from backend import vaani, webcall
+        with mock.patch.object(config, "VAANI_API_KEY", "k"), mock.patch.dict("os.environ", {"VAANI_AGENT_ID": "agent-1"}), \
+                mock.patch.object(vaani, "start_web_call", return_value={
+                    "token": "jwt", "room_name": "webrtc-1791629999-deadbeef", "connection_url": "https://x.test"}) as start:
+            status, out = webcall.start(self.store, "10.0.0.1", "Asha")
+        ref = start.call_args.args[1]
+        self.assertRegex(ref, r"^[a-z2-9]{8}$")
+        self.assertEqual(self.store.get_call("webrtc-1791629999-deadbeef")["call_ref"], ref)
+        self.assertNotIn("call_ref", out)                                         # the browser never sees it
 
 
 class Webhooks(CalcomBase):
