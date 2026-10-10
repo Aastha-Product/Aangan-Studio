@@ -110,7 +110,10 @@ def booking_from_payload(trigger: str, p: dict) -> dict:
     phone = att.get("phoneNumber") or _response_value(responses.get("attendeePhoneNumber"))
     # Where the consultation is: the caller's address = site visit; the event's own address = the studio.
     # A live booking (10 Oct 2026) reported the caller's address as "attendeeInPerson"; the docs say "attendeeAddress".
+    # Webhooks wrap each answer once more: {"label": "location", "value": {"value": "attendeeInPerson", "optionValue": …}}
     loc = responses.get("location") or {}
+    if isinstance(loc, dict) and isinstance(loc.get("value"), dict):
+        loc = loc["value"]
     loc_type = (loc.get("value") if isinstance(loc.get("value"), str) else "") if isinstance(loc, dict) else ""
     visit_type, site_address = None, None
     if loc_type in ("attendeeInPerson", "attendeeAddress"):
