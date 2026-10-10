@@ -213,6 +213,27 @@ class Webhooks(CalcomBase):
         orphan = self.store.find_call("invitee_uri", "calcom:bk_vaani1")
         self.assertEqual((orphan["status"], orphan["call_id"].startswith("calcom-")), ("booked", True))
 
+    def test_unlinked_booking_is_claimed_by_the_email_the_caller_said(self):
+        """Two web calls live at once: the booking can't be linked while it runs, so it's linked after the call."""
+        self._live_call("web-a", None)
+        self._live_call("web-b", None)
+        self._post("BOOKING_CREATED", self._vaani_booking())                   # no phone, no name: not guessed
+        orphan = self.store.find_call("invitee_uri", "calcom:bk_vaani1")
+        self.assertTrue(orphan["call_id"].startswith("calcom-"))
+        from backend import actions
+        fields = {**t01_fields(), "caller_email": "Priya.K@gmail.com"}
+        with mock.patch.object(actions, "extract_fields", return_value={"fields": fields, "usage": {}}):
+            actions.process_completed_call(self.store, "web-a", T01)
+        row = self.store.get_call("web-a")
+        self.assertEqual((row["status"], row["invitee_uri"], row["visit_type"], row["site_address"]),
+                         ("booked", "calcom:bk_vaani1", "site_visit", "Flat 302, Kothrud"))
+        self.assertTrue(row["report_card_sent_at"])                            # designer gets the card
+        self.assertIsNone(self.store.get_call(orphan["call_id"]))              # not listed twice
+        self.assertFalse(any("Confirm a consultation slot" in e["subject"] for e in self.http.emails()))
+        self.assertEqual(self.store.get_call("web-b").get("status"), None)     # the other call is untouched
+        self._post("BOOKING_CANCELLED", self._booking(uid="bk_vaani1", metadata={}))
+        self.assertEqual(self.store.get_call("web-a")["status"], "cancelled")  # later changes follow it
+
     def test_booked_caller_who_fails_the_checks_stays_booked_with_a_warning(self):
         self._live_call("v-nashik", "+919866666666")
         self._post("BOOKING_CREATED", self._vaani_booking(phoneNumber="+919866666666"))

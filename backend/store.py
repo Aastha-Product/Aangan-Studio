@@ -53,6 +53,9 @@ class SupabaseStore:
                             self._h("return=representation"), changes)
         return rows[0] if rows else None
 
+    def delete_call(self, call_id: str) -> None:
+        request_json("DELETE", f"{self.url}/calls?call_id=eq.{urllib.parse.quote(call_id)}", self._h("return=minimal"))
+
     def find_call(self, field: str, value: str) -> dict | None:
         rows = request_json("GET", f"{self.url}/calls?select=*&{field}=eq.{urllib.parse.quote(str(value))}"
                                    f"&order=created_at.desc&limit=1", self._h())
@@ -120,6 +123,11 @@ class LocalStore:
         if call_id not in self.calls:
             return None
         return self.upsert_call({"call_id": call_id, **changes})
+
+    def delete_call(self, call_id):
+        with self._lock:
+            self.calls.pop(call_id, None)
+            self._save()
 
     def find_call(self, field, value):
         hits = [c for c in self.calls.values() if c.get(field) == value]
@@ -284,6 +292,9 @@ class PostgresStore:
         data.pop("call_id", None)
         sets = ", ".join(f"{n} = %s" for n in data)
         return self._run(f"update calls set {sets} where call_id = %s returning *", (*data.values(), call_id), "one")
+
+    def delete_call(self, call_id):
+        self._run("delete from calls where call_id = %s", (call_id,), fetch=None)
 
     def find_call(self, field, value):
         if field not in self.columns("calls"):

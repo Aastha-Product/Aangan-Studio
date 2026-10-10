@@ -68,6 +68,28 @@ def _status_for(decision: str, current: str | None) -> str:
             "Escalate": "escalated", "No data": "no_data"}.get(decision, "unknown")
 
 
+def _adopt_orphan_booking(store, call_id: str, email: str, phone: str | None) -> dict:
+    """A recent booking that no call claimed (call_id 'calcom-…') made with this email or number -> its details,
+    moved onto this call. The unclaimed row is removed so the booking isn't listed twice."""
+    since = datetime.now(timezone.utc) - timedelta(hours=3)
+    for field, value in (("invitee_email", email if "@" in (email or "") else None), ("caller_number", phone)):
+        if not value:
+            continue
+        o = store.find_call(field, value)
+        if not o or o["call_id"] == call_id or not str(o["call_id"]).startswith(("calcom-", "calendly-")):
+            continue
+        t = o.get("booked_at") or o.get("created_at")
+        if o.get("status") != "booked" or not t or parse_time(t) < since:
+            continue
+        keep = ("slot_start", "event_uri", "invitee_uri", "invitee_email", "invitee_name", "designer_email", "designer_name",
+                "cancel_url", "reschedule_url", "booked_at", "booking_provider", "visit_type", "site_address")
+        got = {k: o.get(k) for k in keep if o.get(k)}
+        got.update(status="booked", booked_on_call=True)
+        store.delete_call(o["call_id"])
+        return got
+    return {}
+
+
 def process_completed_call(store, call_id: str, transcript: str, started_at: datetime | None = None,
                            after_hours: bool | None = None) -> dict:
     row = store.get_call(call_id) or {"call_id": call_id}
@@ -95,15 +117,20 @@ def process_completed_call(store, call_id: str, transcript: str, started_at: dat
 
     usage = dict(row.get("usage") or {})
     usage["gemini"] = record["usage"]
-    status = _status_for(res.decision, row.get("status"))
-    if row.get("status") == "booked" and res.decision != "Qualified":
+    f = record["fields"]
+    spoken_email = (f.get("caller_email") or "").strip().lower()
+    # Vaani's calendar tool books without our call id. If no booking was linked to this call while it ran, look for
+    # one made with the email the caller said (web calls have no caller ID, so this is the dependable link).
+    adopted = {} if row.get("status") == "booked" else _adopt_orphan_booking(store, call_id, spoken_email, f.get("caller_phone"))
+    booked = row.get("status") == "booked" or bool(adopted)
+    status = _status_for(res.decision, "booked" if booked else row.get("status"))
+    if booked and res.decision != "Qualified":
         # The calendar already holds the slot (booked live on the call). Keep it, and tell the designer why to look.
         status = "booked"
         res.flags.insert(0, f"⚠ Booked on the call, but the five checks say {res.decision}"
                             f"{' (' + res.reason_code + ')' if res.reason_code else ''}. Review before the consultation")
-    f = record["fields"]
-    spoken_email = (f.get("caller_email") or "").strip().lower()
     changes = {
+        **adopted,
         "call_id": call_id, "transcript": transcript, "fields": record["fields"],
         "caller_name": row.get("caller_name") or record["fields"].get("caller_name"),
         # web calls have no caller ID: the number and email the caller said are the callback details
@@ -123,6 +150,8 @@ def process_completed_call(store, call_id: str, transcript: str, started_at: dat
         f = record["fields"]
         escalate(store, call_id, changes["caller_number"], f.get("caller_name") or "",
                  f.get("property_description") or "", f.get("existing_client_quote") or "existing client complaint")
+    if adopted:
+        store.log_event(call_id, "booking_matched", {"by": "the email the caller gave", "ref": adopted.get("invitee_uri")})
     if res.decision == "Qualified" and status == "booking_pending" and row.get("status") != "booking_pending":
         booking_pending(store, call_id, "qualified on the call but no slot was booked")
     maybe_send_report_card(store, call_id)
