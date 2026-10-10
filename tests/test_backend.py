@@ -633,6 +633,32 @@ class WebCalls(Base):
         with mock.patch.object(config, "VAANI_API_KEY", ""):
             self.assertTrue(self.post("/api/webcall/start", {})[0].startswith("503"))
 
+    def test_setup_page_only_says_working_if_this_site_can_start_a_call(self):
+        from backend import dashboard
+        status = lambda: next(s for s in dashboard.setup_status(self.store) if s["name"] == "Web calls")  # noqa: E731
+        self.store.log_event(self.ROOM, "webcall_ended", {"seconds": 20})      # a finished call exists...
+        with mock.patch.object(config, "VAANI_API_KEY", ""):
+            s = status()                                                       # ...but this site has no Vaani key
+            self.assertEqual(s["state"], "no")
+            self.assertIn("doesn't have the Vaani API key", s["what"])
+        self.assertEqual(status()["state"], "ok")                              # key present + a finished call
+
+    def test_setup_page_email_check(self):
+        from backend import dashboard
+        email = lambda: next(s for s in dashboard.setup_status(self.store) if s["name"] == "Email")  # noqa: E731
+        with mock.patch.object(config, "EMAIL_FROM", "Aangan Studio Agent <onboarding@resend.dev>"), \
+                mock.patch.object(config, "DESIGNER_EMAILS", ["me@x.test"]), \
+                mock.patch.object(config, "STUDIO_HEAD_ALERT_EMAIL", "me@x.test"), \
+                mock.patch.object(config, "FRONT_DESK_EMAIL", "me@x.test"):
+            self.assertEqual(email()["state"], "warn")                         # nothing sent yet
+            self.store.log_event(None, "email_sent", {"subject": "Report card", "to": ["me@x.test"]})
+            self.assertEqual(email()["state"], "ok")                           # one inbox, sends succeeding
+            self.store.log_event(None, "email_failed", {"subject": "x", "to": ["me@x.test"], "error": "403"})
+            self.assertEqual(email()["state"], "warn")                         # a failure reopens it
+        with mock.patch.object(config, "EMAIL_FROM", "Aangan <agent@resend.dev>"), \
+                mock.patch.object(config, "DESIGNER_EMAILS", ["a@x.test", "b@x.test"]):
+            self.assertEqual(email()["state"], "warn")                         # test sender + several designers
+
     def test_sweep_finishes_calls_whose_page_was_closed(self):
         self.post("/api/webcall/start", {})
         old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()

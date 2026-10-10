@@ -1286,17 +1286,22 @@ def setup_status(store, now: datetime | None = None) -> list[dict]:
     web_done, _ = stats("webcall_ended")
     agent_ready = bool(config.VAANI_API_KEY and config.env("VAANI_AGENT_ID"))
     page = (config.PUBLIC_BASE_URL or "") + "/call"
+    # "Working" only if THIS site can start a call (it has the Vaani key and agent id) and one has been completed.
+    # Earlier test calls from a computer don't count while the live site itself can't start one.
+    state = "no" if not agent_ready else "ok" if web_done or vaani else "warn"
     out.append({
-        "name": "Web calls", "state": "ok" if web_done or vaani else "warn" if agent_ready else "no",
+        "name": "Web calls", "state": state,
         "what": (f"Callers talk to the agent from {page} (no phone number needed). Last web call: {when(web_t)}."
-                 if web_done or vaani else
-                 f"The call page is ready at {page}, but no web call has been completed yet." if agent_ready else
-                 "The Vaani agent isn't connected, so web calls can't start."),
-        "fix": None if web_done or vaani else [
+                 if state == "ok" else
+                 f"The call page is ready at {page}, but no web call has been completed on this site yet."
+                 if state == "warn" else
+                 f"Callers can open {page}, but a call can't start yet: this site doesn't have the Vaani API key saved."),
+        "fix": None if state == "ok" else [
             f"Open {page}, click Start web call, allow the microphone, and talk to the agent as a caller would.",
             "Hang up; within about a minute the call appears on the Home page with its outcome.",
-            "Then share the page link (website, Instagram bio, WhatsApp) so callers can use it."] if agent_ready else [
-            "Set the Vaani API key and agent id."],
+            "Then share the page link (website, Instagram bio, WhatsApp) so callers can use it."] if state == "warn" else [
+            "In Vercel → Project → Settings → Environment Variables, add VAANI_API_KEY as a Secret (the key from Vaani).",
+            "Redeploy, then open the call page and make a test call."],
         "setting": "VAANI_API_KEY, VAANI_AGENT_ID"})
 
     provider = config.BOOKING_PROVIDER
@@ -1316,18 +1321,31 @@ def setup_status(store, now: datetime | None = None) -> list[dict]:
 
     sender = config.EMAIL_FROM or ""
     test_sender = sender.endswith("@resend.dev>") or sender.endswith("@resend.dev")
-    email_state = "no" if not config.RESEND_API_KEY else "warn" if (test_sender or failed) else "ok"
-    recipients = ", ".join(config.DESIGNER_EMAILS) or "nobody"
-    what = (f"Report cards, alerts and the 7pm email are sent from \"{sender}\" to {recipients}.")
-    if test_sender:
-        what += (" That is Resend's test address: it only delivers to the Resend account owner's own inbox, "
-                 "and the sender name may not be the studio's.")
+    inboxes = sorted({x.lower() for x in [*config.DESIGNER_EMAILS, config.STUDIO_HEAD_ALERT_EMAIL, config.FRONT_DESK_EMAIL] if x})
+    sent_n, _ = stats("email_sent")
+    # Resend's test sender only delivers to the Resend account owner. That's fine while every email goes to one
+    # inbox and sends are succeeding; it stops working the day a second designer's address is added.
+    if not config.RESEND_API_KEY:
+        email_state = "no"
+    elif failed or (test_sender and len(inboxes) > 1) or not sent_n:
+        email_state = "warn"
+    else:
+        email_state = "ok"
+    what = f"Report cards, alerts and the 7pm email are sent from \"{sender}\" to {', '.join(inboxes) or 'nobody'}."
+    if test_sender and email_state == "ok":
+        what += (" This uses Resend's test sender, which works while every email goes to this one inbox. "
+                 "To email other designers, verify the studio's own domain in Resend first.")
+    elif test_sender and len(inboxes) > 1:
+        what += (" That is Resend's test sender: it only delivers to the Resend account owner's own inbox, "
+                 "so emails to the other addresses will fail until the studio's domain is verified.")
     if failed:
         what += f" {_plural(failed, 'email')} failed in the last 30 days (see the call pages)."
+    elif not sent_n and config.RESEND_API_KEY:
+        what += " No email has been sent yet."
     out.append({
         "name": "Email", "state": email_state, "what": what if config.RESEND_API_KEY else "Email isn't connected, so nobody is notified.",
         "fix": None if email_state == "ok" else [
-            "Verify the studio's own domain in Resend.",
+            "Verify the studio's own domain in Resend (a DNS change by whoever manages the domain).",
             "Change the sender to something like \"Aangan Studio <agent@yourdomain>\".",
             "List every designer's email for report cards and the 7pm email."],
         "setting": "RESEND_API_KEY, EMAIL_FROM, DESIGNER_EMAILS, STUDIO_HEAD_ALERT_EMAIL, FRONT_DESK_EMAIL"})
