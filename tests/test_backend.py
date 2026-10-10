@@ -69,7 +69,7 @@ class Base(unittest.TestCase):
             "DESIGNER_EMAILS": ["designer@aangan.test"], "STUDIO_HEAD_ALERT_EMAIL": "nikhil@aangan.test",
             "FRONT_DESK_EMAIL": "desk@aangan.test", "HUBSPOT_TOKEN": "hs_test", "APP_SECRET": "s3cret",
             "VAANI_WEBHOOK_SECRET": "vaani_test", "CRON_SECRET": "cron_test", "DASHBOARD_TOKEN": "dash_test",
-            "PUBLIC_BASE_URL": "https://agent.aangan.test",
+            "PUBLIC_BASE_URL": "https://agent.aangan.test", "DASHBOARD_PUBLIC": False,
             "BOOKING_PROVIDER": "calendly", "CALCOM_API_KEY": "cal_test", "CALCOM_EVENT_TYPE_ID": "999",
             "CALCOM_WEBHOOK_SECRET": "calsec_test",
         }.items():
@@ -407,6 +407,20 @@ class OtherEndpoints(Base):
         status, page = wsgi("GET", "/dashboard/call?call_id=d1&token=dash_test")
         self.assertTrue(status.startswith("200"))
         self.assertIn("Report card for d1", page)            # activity log shows what happened after the call
+
+    def test_dashboard_can_be_public_without_token(self):
+        with mock.patch.object(config, "DASHBOARD_PUBLIC", True):
+            now = config.now_ist()
+            self.store.upsert_call({"call_id": "pub1", "started_at": now.isoformat(), "answered_at": now.isoformat(),
+                                    "decision": "Qualified", "status": "booking_pending", "caller_name": "Public caller",
+                                    "transcript": "Agent: Hello\nCaller: I need interiors in Pune"})
+            status, page = wsgi("GET", "/dashboard")
+            self.assertTrue(status.startswith("200"))
+            self.assertIn("Public dashboard", page)
+            self.assertIn("Public caller", page)
+            status, page = wsgi("GET", "/dashboard/call?call_id=pub1")
+            self.assertTrue(status.startswith("200"))
+            self.assertIn("I need interiors in Pune", page)
 
     def test_mark_done_reopen_and_overturn(self):
         now = config.now_ist()

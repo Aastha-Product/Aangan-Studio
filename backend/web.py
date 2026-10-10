@@ -5,7 +5,7 @@ POST /api/calcom/webhook     Cal.com BOOKING_CREATED / RESCHEDULED / CANCELLED /
 POST /api/vaani/webhook      Vaani call_started / call_ended / call_postprocessing (?key= verified)
 GET  /api/cron/digest        7pm digest (Vercel cron, Bearer CRON_SECRET)
 GET  /api/reask              designer's "I had to re-ask the basics" tick    (signed link)
-GET  /dashboard              Nikhil's dashboard (?token=DASHBOARD_TOKEN once, or the sign-in page; then a 30-day cookie)
+GET  /dashboard              Aangan Studio dashboard (public while DASHBOARD_PUBLIC=true)
 GET/POST /dashboard/login    sign in: own account (email + password) or the studio password
 GET/POST /dashboard/signup   create an account (needs the studio password, so only the team can join)
 POST /dashboard/logout       sign out
@@ -54,10 +54,12 @@ def _cookie(environ, name) -> str | None:
 
 
 def _viewer(environ, query, store) -> tuple[dict | None, list]:
-    """Who is looking: a signed-in account, the studio password, or the older ?token= link. -> (viewer, cookies)."""
+    """Who is looking: public dashboard, a signed-in account, studio password, or older ?token= link."""
     v = auth.viewer(store, _cookie(environ, auth.COOKIE))
     if v:
         return v, []
+    if config.DASHBOARD_PUBLIC:
+        return {"kind": "public", "name": "Aangan Studio"}, []
     token = config.DASHBOARD_TOKEN
     if not token:
         return ({"kind": "studio"} if not os.environ.get("VERCEL") else None), []   # no token set: local only
@@ -332,7 +334,8 @@ def configured() -> dict:
     return {
         "database": bool(config.DATABASE_URL), "public_base_url": config.PUBLIC_BASE_URL or None,
         "dashboard_token": _fingerprint(config.DASHBOARD_TOKEN), "cron_secret": _fingerprint(config.CRON_SECRET),
-        "app_secret": bool(config.APP_SECRET), "gemini": bool(config.env("GEMINI_API_KEY")),
+        "dashboard_public": config.DASHBOARD_PUBLIC, "app_secret": bool(config.APP_SECRET),
+        "gemini": bool(config.env("GEMINI_API_KEY")),
         "resend": bool(config.RESEND_API_KEY), "hubspot": bool(config.HUBSPOT_TOKEN),
         "booking_provider": config.BOOKING_PROVIDER, "calcom": bool(config.CALCOM_API_KEY),
         "calcom_event_type": bool(config.CALCOM_EVENT_TYPE_ID), "vaani_webhook": bool(config.VAANI_WEBHOOK_SECRET),

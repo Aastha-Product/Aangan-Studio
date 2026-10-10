@@ -79,6 +79,7 @@ VAANI_WEBHOOK_SECRET = env("VAANI_WEBHOOK_SECRET")
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL").rstrip("/")     # e.g. https://aangan-agent.vercel.app
 APP_SECRET = env("APP_SECRET")                            # signs "re-ask" links
 DASHBOARD_TOKEN = env("DASHBOARD_TOKEN")
+DASHBOARD_PUBLIC = env("DASHBOARD_PUBLIC", "true").lower() not in ("0", "false", "no", "off")
 CRON_SECRET = env("CRON_SECRET")                          # Vercel sends "Authorization: Bearer <CRON_SECRET>"
 NURTURE_FOLLOW_UP_DAYS = 35                               # CLAUDE.md: follow up in 4–6 weeks
 

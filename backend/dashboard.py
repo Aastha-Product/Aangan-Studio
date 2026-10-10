@@ -946,6 +946,8 @@ def _user_menu() -> str:
     v = VIEWER.get()
     if not v:
         return ""
+    if v.get("kind") == "public":
+        return ""
     if v.get("kind") == "account":
         who, sub = v.get("name") or v.get("email"), v.get("email")
         ini = "".join(p[0].upper() for p in (v.get("name") or v.get("email") or "?").split()[:2] if p[:1].isalnum()) or "?"
@@ -980,12 +982,15 @@ def _page(title: str, body: str, token: str, active: str | None = None, period: 
     if v and v.get("kind") == "account":
         who, sub = v.get("name") or v.get("email"), v.get("email")
         ini = "".join(p[0].upper() for p in (v.get("name") or v.get("email") or "?").split()[:2] if p[:1].isalnum()) or "?"
+    elif v and v.get("kind") == "public":
+        who, sub, ini = "Public dashboard", "no sign-in required", "A"
     else:
         who, sub, ini = "Studio login", "shared studio password", "A"
     side_user = (f"<div class='side-user'><span class='uav' aria-hidden='true'>{e(ini[:2])}</span>"
                  f"<div><b>{e(who or '')}</b><small>{e(sub or '')}</small></div>"
                  + ("<form method='post' action='/dashboard/logout'><button class='iconbtn' type='submit' title='Sign out' "
-                    f"aria-label='Sign out'>{_icon('logout', 18)}</button></form>" if v else "") + "</div>")
+                    f"aria-label='Sign out'>{_icon('logout', 18)}</button></form>"
+                    if v and v.get("kind") != "public" else "") + "</div>")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 {FONT_LINK}<link rel="icon" href="{FAVICON}"><title>{e(title)}</title><style>{CSS}{CSS_V2}</style></head>
