@@ -232,15 +232,15 @@ PAGE_JS = """
 
 
 def render_page() -> str:
-    from .dashboard import CSS, FAVICON, _icon, photo_credit, photo_url
+    from .dashboard import CSS, CSS_V2, FAVICON, FONT_LINK, _icon, photo_credit, photo_url
     phone = _icon("phone", 20)
     photo = (f"<div class=\"callphoto\" style=\"background-image:url('{photo_url('call', 960)}')\" role=\"img\" "
              f"aria-label=\"A bright, sunlit living room with wooden furniture and plants\">{photo_credit('call')}</div>")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="{FAVICON}"><title>Talk to Aangan Studio</title>
+{FONT_LINK}<link rel="icon" href="{FAVICON}"><title>Talk to Aangan Studio</title>
 <meta name="description" content="Talk to Aangan Studio's assistant about designing your home or office in Pune, any time.">
-<style>{CSS}{PAGE_CSS}</style></head>
+<style>{CSS}{CSS_V2}{PAGE_CSS}</style></head>
 <body class="viz-root"><main class="callpage"><div class="card callcard">
 {photo}
 <div class="brand"><span class="mark">A</span><span style="text-align:left"><b>Aangan Studio</b><small>Interior design · Pune</small></span></div>

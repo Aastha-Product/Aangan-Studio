@@ -393,6 +393,9 @@ class OtherEndpoints(Base):
         self.assertTrue(status.startswith("200"))
         self.assertIn("Consultations booked", page)
         self.assertIn("Your to-do list", page)
+        self.assertIn("How calls ended", page)                      # outcome donut
+        self.assertIn("class='app'", page.replace('class="app"', "class='app'"))   # sidebar layout
+        self.assertIn("When calls come in", wsgi("GET", "/dashboard/reports?token=dash_test")[1])
         for tab in ("calls", "reports", "setup"):
             status, sub = wsgi("GET", f"/dashboard/{tab}?token=dash_test")
             self.assertTrue(status.startswith("200"), tab)

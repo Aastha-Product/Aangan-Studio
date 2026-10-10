@@ -172,12 +172,14 @@ def compute_metrics(calls: list[dict], events: list[dict], now: datetime, days: 
         day_keys.append(d)
         d += timedelta(days=1)
     per_day = {k: {"calls": 0, "bookings": 0, **{g: 0 for g, _ in GROUPS}} for k in day_keys}
+    per_hour = [0] * 24                      # calls by the hour they came in (IST), for the after-hours picture
     for c in in_range:
         t = _ts(c.get("started_at") or c.get("created_at"))
         if t and t.astimezone(config.IST).date() in per_day:
             day = per_day[t.astimezone(config.IST).date()]
             day["calls"] += 1
             day[group_of(c)] += 1
+            per_hour[t.astimezone(config.IST).hour] += 1
             if c.get("booked_on_call"):
                 day["bookings"] += 1
 
@@ -217,6 +219,7 @@ def compute_metrics(calls: list[dict], events: list[dict], now: datetime, days: 
         "reasons": [(r, reasons[r]) for r in REASON_ORDER if reasons.get(r)],
         "groups": {g: groups.get(g, 0) for g, _ in GROUPS},
         "per_day": [(k, v["calls"], v["bookings"]) for k, v in per_day.items()],
+        "per_hour": per_hour,
         "per_day_groups": [(k, v["booked"], v["follow_up"], v["closed"]) for k, v in per_day.items()],
         "attention": [(c, text, urgency) for *_, c, text, urgency in attention],
         "ever": len(calls),
@@ -405,6 +408,7 @@ _ICON_PATHS = {
     "x": "M6 6l12 12M18 6L6 18",
     "info": "M12 8h.01M11 12h1v5h1M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z",
     "moon": "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z",
+    "logout": "M15 12H4M10 8l-4 4 4 4M13 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5",
     "clock": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
     "archive": "M3 4h18v4H3zM5 8v12h14V8M10 12h4",
 }
@@ -760,6 +764,178 @@ PERIOD_LABEL = {"1": "today", "7": "in the last 7 days", "30": "in the last 30 d
 PERIOD_VS = {"1": "yesterday", "7": "previous 7 days", "30": "previous 30 days", "mtd": "same days last month"}
 
 
+FONT_LINK = ("<link rel='preconnect' href='https://fonts.googleapis.com'><link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
+             "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'>")
+
+# Second layer of styles: dark sidebar layout, richer cards, gradients, sparklines and charts. Loaded after CSS.
+CSS_V2 = """
+.viz-root{--page:#f4f1ec;--side-bg:#1d1612;--side-ink:#efe6dd;--side-muted:#a89a90;--side-hover:rgba(255,255,255,.07);
+--side-active:rgba(255,255,255,.12);--grad:linear-gradient(135deg,#c2693d,#8c3c1e);--accent:#c2693d;
+--card-shadow:0 1px 2px rgba(48,30,18,.05),0 14px 30px -20px rgba(48,30,18,.30);
+font-family:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-feature-settings:"cv11","ss01"}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .viz-root{--page:#0e0b09;--side-bg:#150f0c;--card-shadow:none}}
+:root[data-theme="dark"] .viz-root{--page:#0e0b09;--side-bg:#150f0c;--card-shadow:none}
+.card{border-radius:18px;box-shadow:var(--card-shadow)}
+.btn{border-radius:11px}
+.btn.primary{background:var(--grad);border-color:transparent;color:#fff;box-shadow:0 6px 16px -8px rgba(140,60,30,.8)}
+.btn.primary:hover{opacity:1;filter:brightness(1.07)}
+/* shell: sidebar + main */
+.app{display:grid;grid-template-columns:256px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;background:var(--side-bg);color:var(--side-ink);display:flex;flex-direction:column;
+padding:22px 14px 16px;gap:2px;overflow-y:auto}
+.side .brand{padding:2px 10px 20px;margin:0}.side .brand b{color:#fff}.side .brand small{color:var(--side-muted)}
+.side .mark{background:var(--grad);color:#fff;box-shadow:0 8px 18px -8px rgba(194,105,61,.9)}
+.navlabel{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--side-muted);padding:6px 12px 8px}
+.nav{display:grid;gap:3px}
+.nav a{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;color:var(--side-ink);text-decoration:none;
+font-size:14.5px;opacity:.78;position:relative;transition:background .15s,opacity .15s}
+.nav a:hover{background:var(--side-hover);opacity:1}
+.nav a.on{background:var(--side-active);opacity:1;font-weight:600}
+.nav a.on::before{content:"";position:absolute;left:-14px;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:#e9976f}
+.nav .count{margin-left:auto}.nav .pip{margin-left:auto}
+.side-cta{margin-top:auto;border-radius:16px;padding:16px;background:linear-gradient(160deg,rgba(255,255,255,.11),rgba(255,255,255,.03));
+border:1px solid rgba(255,255,255,.09)}
+.side-cta b{display:block;font-size:14px;margin-bottom:4px;color:#fff}
+.side-cta p{margin:0 0 12px;font-size:12.5px;color:var(--side-muted);line-height:1.5}
+.side-cta .btn{width:100%}
+.side-user{display:flex;gap:10px;align-items:center;padding:14px 6px 0;margin-top:14px;border-top:1px solid rgba(255,255,255,.09)}
+.side-user .uav{background:rgba(255,255,255,.12);color:#fff;flex:none}
+.side-user div{min-width:0;flex:1}.side-user b{display:block;font-size:13.5px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-user small{display:block;font-size:11.5px;color:var(--side-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-user form{margin:0}
+.iconbtn{width:34px;height:34px;border-radius:10px;border:0;background:transparent;color:var(--side-muted);display:grid;place-items:center;cursor:pointer}
+.iconbtn:hover{background:var(--side-hover);color:#fff}
+.main{min-width:0}
+.top{position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:14px;padding:13px 32px;
+background:color-mix(in srgb,var(--page) 80%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.top .crumb{font-weight:650;font-size:15.5px}.top .crumb small{color:var(--muted);font-weight:400;margin-left:8px;font-size:13px}
+.top .seg{margin-left:auto}.top .usermenu{display:none}
+.main main{padding:0}.main .wrap{max-width:1200px;padding:28px 32px 72px}
+/* hero */
+.card.hello{background:var(--surface-1);border-radius:22px}
+.hello-text{padding:30px 32px}.hello-text h1{font-size:30px}
+.hello-photo::before{background:linear-gradient(90deg,var(--surface-1),transparent 34%)}
+/* KPI cards with trend lines */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+a.kpi{position:relative;display:flex;flex-direction:column;padding:18px 18px 12px;overflow:hidden;text-decoration:none;
+transition:transform .18s,box-shadow .18s,border-color .18s}
+a.kpi:hover{transform:translateY(-2px);border-color:var(--axis);box-shadow:0 18px 36px -22px rgba(48,30,18,.45)}
+.kpi .top-row{display:flex;align-items:center;gap:10px;color:var(--text-secondary);font-size:13.5px}
+.kpi .num{font-size:38px;font-weight:700;letter-spacing:-.035em;line-height:1.05;margin-top:12px}
+.kpi .foot{font-size:12.5px;color:var(--muted);margin-top:4px;min-height:19px}
+.kpi .spark{margin:6px -8px -6px}.kpi .spark svg{display:block;width:100%;height:46px}
+.sicon{width:34px;height:34px;border-radius:11px}
+/* chart cards */
+.charts{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:16px;margin-top:16px}
+.donutwrap{display:flex;align-items:center;gap:22px;flex-wrap:wrap;justify-content:center}
+.donut{position:relative;width:176px;height:176px;flex:none}
+.donut svg{width:100%;height:100%;transform:rotate(-90deg)}
+.donut .mid{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
+.donut .mid b{font-size:34px;letter-spacing:-.03em;line-height:1}.donut .mid span{font-size:12px;color:var(--muted);margin-top:4px}
+.dlegend{display:grid;gap:12px;min-width:150px}
+.dlegend .it{display:flex;align-items:center;gap:10px;font-size:14px}
+.dlegend .it b{margin-left:auto;font-variant-numeric:tabular-nums}.dlegend .it small{color:var(--muted);font-size:12px;margin-left:6px}
+.hours svg{width:100%;height:auto;display:block}
+/* friendlier lists */
+.avatar{background:hsl(var(--h,20) 62% 91%);color:hsl(var(--h,20) 48% 30%)}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .avatar{background:hsl(var(--h,20) 28% 22%);color:hsl(var(--h,20) 70% 78%)}}
+a.item{padding:13px 8px;border-radius:14px}
+.cardhead h2{font-size:16.5px;letter-spacing:-.01em}
+.badge{padding:3px 10px 3px 7px}
+.section-title{margin-top:32px}
+.footer{margin-top:40px}
+/* phones and tablets: the sidebar becomes a scrolling bar at the top */
+@media (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.charts{grid-template-columns:1fr}}
+@media (max-width:960px){
+ .app{display:block}
+ .side{position:sticky;top:0;z-index:7;height:auto;flex-direction:row;align-items:center;padding:8px 12px;gap:6px;overflow-x:auto;
+  scrollbar-width:none}
+ .side .brand{padding:0 10px 0 2px}.side .brand small,.navlabel,.side-cta,.side-user{display:none}
+ .nav{display:flex;gap:2px}.nav a{white-space:nowrap;padding:8px 12px;font-size:14px}.nav a.on::before{display:none}
+ .top{position:static;padding:10px 14px;flex-wrap:wrap}.top .usermenu{display:block}
+ .top .seg{margin-left:0;order:3;width:100%;overflow-x:auto}.top .usermenu{margin-left:auto}
+ .main .wrap{padding:16px 14px 56px}.hello-text{padding:20px}.hello-text h1{font-size:25px}
+}
+@media (max-width:760px){.card.hello{grid-template-columns:1fr}.hello-photo{order:-1;min-height:130px}
+ .hello-photo::before{background:linear-gradient(0deg,var(--surface-1),transparent 45%)}}
+@media (max-width:520px){.kpis{gap:10px}.kpi .num{font-size:30px}a.kpi{padding:14px 14px 8px}.kpi .top-row{font-size:12.5px}
+ .donut{width:150px;height:150px}.donut .mid b{font-size:28px}}
+"""
+
+_LOGOUT = "M15 12H4M10 8l-4 4 4 4M13 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"
+
+
+def _hue(text: str) -> int:
+    """A steady colour for a person's avatar, from their name."""
+    return sum(ord(ch) * (i + 3) for i, ch in enumerate(text or "?")) % 360
+
+
+def _spark(values: list[int], color: str) -> str:
+    """A small trend line with a soft area under it. Decorative: the number beside it says it all."""
+    n = len(values)
+    W, H = 160, 46
+    if n < 2:
+        return ""
+    top = max(values) or 1
+    pts = [(W * i / (n - 1), H - 5 - (v / top) * (H - 14)) for i, v in enumerate(values)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"0,{H} {line} {W},{H}"
+    return (f"<svg viewBox='0 0 {W} {H}' preserveAspectRatio='none' aria-hidden='true'>"
+            f"<polygon points='{area}' fill='{color}' opacity='.13'/>"
+            f"<polyline points='{line}' fill='none' stroke='{color}' stroke-width='2' vector-effect='non-scaling-stroke' "
+            f"stroke-linejoin='round' stroke-linecap='round'/></svg>")
+
+
+def _donut(parts: list[tuple[str, int, str]], centre_big: str, centre_small: str) -> str:
+    """Ring chart of [(label, count, colour)] with 2px gaps; the centre carries the one number that matters."""
+    total = sum(v for _, v, _ in parts)
+    r, cx, sw = 62, 80, 17
+    circ = 2 * 3.14159265 * r
+    out = [f"<svg viewBox='0 0 160 160' role='img' aria-label='{e(centre_big)} {e(centre_small)}'>"
+           f"<circle cx='{cx}' cy='{cx}' r='{r}' fill='none' stroke='var(--surface-2)' stroke-width='{sw}'/>"]
+    offset = 0.0
+    for label, v, color in parts:
+        if not v or not total:
+            continue
+        seg = circ * v / total
+        gap = 3 if len([p for p in parts if p[1]]) > 1 else 0
+        out.append(f"<circle cx='{cx}' cy='{cx}' r='{r}' fill='none' stroke='{color}' stroke-width='{sw}' "
+                   f"stroke-dasharray='{max(seg - gap, 0.5):.1f} {circ:.1f}' stroke-dashoffset='{-offset:.1f}' stroke-linecap='butt'>"
+                   f"<title>{e(label)}: {v}</title></circle>")
+        offset += seg
+    out.append("</svg>")
+    return (f"<div class='donut'>{''.join(out)}<div class='mid'><b>{e(centre_big)}</b><span>{e(centre_small)}</span></div></div>")
+
+
+def _hours_svg(per_hour: list[int]) -> str:
+    """Calls by hour of the day. Hours outside the front desk's 10am-7pm are drawn in the second colour."""
+    W, H, L, B, T = 640, 180, 26, 24, 8
+    top = max([1] + per_hour)
+    step = max(1, -(-top // 3))
+    ymax = step * 3
+    band = (W - L) / 24
+    bw = band * 0.62
+    y = lambda v: T + (H - T - B) * (1 - v / ymax)  # noqa: E731
+    parts = [f"<svg viewBox='0 0 {W} {H}' role='img' aria-label='Calls by hour of the day'>"]
+    for k in range(4):
+        v = step * k
+        parts.append(f"<line x1='{L}' x2='{W}' y1='{y(v):.1f}' y2='{y(v):.1f}' stroke='var({'--axis' if k == 0 else '--grid'})'/>"
+                     f"<text x='{L - 6}' y='{y(v) + 4:.1f}' text-anchor='end' font-size='11' fill='var(--muted)'>{v}</text>")
+    for h, v in enumerate(per_hour):
+        x = L + band * h + (band - bw) / 2
+        after = h < 10 or h >= 19
+        color = "var(--series-2)" if after else "var(--series-1)"
+        label = f"{h % 12 or 12}{'am' if h < 12 else 'pm'}"
+        if v:
+            parts.append(f"<path d='{_round_top(x, y(v), bw, y(0) - y(v))}' fill='{color}'/>")
+        parts.append(f"<rect x='{L + band * h:.1f}' y='{T}' width='{band:.1f}' height='{H - T - B}' fill='transparent'>"
+                     f"<title>{label}: {_plural(v, 'call')}{' (after hours)' if after else ''}</title></rect>")
+        if h % 3 == 0:
+            parts.append(f"<text x='{x + bw / 2:.1f}' y='{H - 7}' text-anchor='middle' font-size='11' fill='var(--muted)'>{label}</text>")
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def _viewer_name() -> str:
     v = VIEWER.get() or {}
     return (v.get("name") or v.get("email") or "") if v.get("kind") == "account" else ""
@@ -799,16 +975,30 @@ def _page(title: str, body: str, token: str, active: str | None = None, period: 
             f"<a class='{'on' if period == p else ''}' href='{e(_q(path, token, period=p))}'>{label}</a>"
             for p, label in PERIODS) + "</nav>"
     toast = (f"<div class='toast' role='status'>{_icon('check')}{e(FLASH[flash])}</div>" if flash in FLASH else "")
+    crumb = {"home": "Overview", "calls": "Calls", "reports": "Reports", "setup": "Setup"}.get(active or "", "Dashboard")
+    v = VIEWER.get()
+    if v and v.get("kind") == "account":
+        who, sub = v.get("name") or v.get("email"), v.get("email")
+        ini = "".join(p[0].upper() for p in (v.get("name") or v.get("email") or "?").split()[:2] if p[:1].isalnum()) or "?"
+    else:
+        who, sub, ini = "Studio login", "shared studio password", "A"
+    side_user = (f"<div class='side-user'><span class='uav' aria-hidden='true'>{e(ini[:2])}</span>"
+                 f"<div><b>{e(who or '')}</b><small>{e(sub or '')}</small></div>"
+                 + ("<form method='post' action='/dashboard/logout'><button class='iconbtn' type='submit' title='Sign out' "
+                    f"aria-label='Sign out'>{_icon('logout', 18)}</button></form>" if v else "") + "</div>")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<link rel="icon" href="{FAVICON}"><title>{e(title)}</title><style>{CSS}</style></head>
-<body class="viz-root"{' data-refresh="1"' if refresh else ''}>
-<header class="topbar"><div class="wrap"><a class="brand" href="{e(_q('/dashboard', token))}"><span class="mark">A</span>
+{FONT_LINK}<link rel="icon" href="{FAVICON}"><title>{e(title)}</title><style>{CSS}{CSS_V2}</style></head>
+<body class="viz-root"{' data-refresh="1"' if refresh else ''}><div class="app">
+<aside class="side"><a class="brand" href="{e(_q('/dashboard', token))}"><span class="mark">A</span>
 <span><b>Aangan Studio</b><small>Phone enquiries</small></span></a>
-<nav class="tabs" aria-label="Sections">{''.join(tabs)}</nav>{seg}{_user_menu()}</div></header>
+<div class="navlabel">Menu</div><nav class="nav" aria-label="Sections">{''.join(tabs)}</nav>
+<div class="side-cta"><b>Hear it for yourself</b><p>Call the agent the way a customer would, from your browser.</p>
+<a class="btn primary" href="/call" target="_blank" rel="noopener">{_icon('phone')}Start a web call</a></div>{side_user}</aside>
+<div class="main"><header class="top"><span class="crumb">{crumb}<small>Aangan Studio</small></span>{seg}{_user_menu()}</header>
 <main><div class="wrap">{body}
 <p class="footer">Every call to the studio is answered by the agent, day or night. It never quotes a price.</p>
-</div></main>{toast}<script>{JS}</script></body></html>"""
+</div></main></div></div>{toast}<script>{JS}</script></body></html>"""
 
 
 # Free Unsplash photos (unsplash.com/license), hotlinked as Unsplash asks, always credited on the page.
@@ -865,7 +1055,7 @@ color:var(--text-secondary)!important;font-size:14px}
 def _auth_page(title: str, body: str) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<link rel="icon" href="{FAVICON}"><title>{e(title)} · Aangan</title><style>{CSS}{LOGIN_CSS}</style></head>
+{FONT_LINK}<link rel="icon" href="{FAVICON}"><title>{e(title)} · Aangan</title><style>{CSS}{CSS_V2}{LOGIN_CSS}</style></head>
 <body class="viz-root"><main class="login">
 <div class="side" style="background-image:url('{photo_url('signin', 1400)}')" role="img" aria-label="A warm, sunlit living room">
 <div class="words"><b>Every enquiry answered, day or night.</b><span>Calls, bookings and follow-ups for the Aangan Studio
@@ -1046,7 +1236,8 @@ def _call_item(c, token, now, *, todo=None, show_day=False, back="/dashboard", a
     """One call as a friendly list row: avatar, name + project, status + next step, when + interest."""
     href = e(_q("/dashboard/call", token, call_id=c["call_id"]))
     ini = _initials(c)
-    avatar = f"<span class='avatar' aria-hidden='true'>{e(ini) if ini else _icon('user', 18)}</span>"
+    avatar = (f"<span class='avatar' style='--h:{_hue(_caller(c))}' aria-hidden='true'>"
+              f"{e(ini) if ini else _icon('user', 18)}</span>")
     if todo:
         text, urgency = todo
         l2 = (f"{_badge(c)}<span class='{'urgent' if urgency == 'high' else ''}'>"
@@ -1111,20 +1302,36 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
 
     g = m["groups"]
     chip = lambda icon, color: f"<span class='sicon' style='--c:{color}' aria-hidden='true'>{_icon(icon, 18)}</span>"  # noqa: E731
+    s_calls = [c for _, c, _ in m["per_day"]]
+    s_booked, s_follow, s_closed = ([row[i] for row in m["per_day_groups"]] for i in (1, 2, 3))
     stats = "".join(
-        f"<a class='card stat' href='{e(_q('/dashboard/calls', token, period=period, group=grp))}'>"
-        f"<div class='label'>{key}{e(label)}</div><div class='num'>{num}</div><div class='note'>{note}</div></a>"
-        for grp, key, label, num, note in (
+        f"<a class='card kpi' href='{e(_q('/dashboard/calls', token, period=period, group=grp))}'>"
+        f"<div class='top-row'>{icon}<span>{e(label)}</span></div><div class='num'>{num}</div>"
+        f"<div class='foot'>{note}</div><div class='spark'>{_spark(series, color)}</div></a>"
+        for grp, icon, label, num, note, series, color in (
             ("all", chip("phone", "var(--brand)"), "Calls answered", m["answered"],
-             _delta(m["answered"], prev and prev["answered"], vs=vs) or e(f"{m['after_hours']} after hours")),
+             _delta(m["answered"], prev and prev["answered"], vs=vs) or e(f"{m['after_hours']} after hours"),
+             s_calls, "var(--brand)"),
             ("booked", chip("check", GROUP_COLOR["booked"]), "Consultations booked",
              m["booked_any"], _delta(m["booked_any"], prev and prev["booked_any"], vs=vs)
-             or e(f"{m['booked_on_call']} booked during the call itself")),
+             or e(f"{m['booked_on_call']} booked during the call itself"), s_booked, GROUP_COLOR["booked"]),
             ("follow_up", chip("clock", GROUP_COLOR["follow_up"]), "Need a follow-up",
-             g["follow_up"], e(GROUP_HINT["follow_up"])),
+             g["follow_up"], e("someone has to call or confirm"), s_follow, GROUP_COLOR["follow_up"]),
             ("closed", chip("archive", GROUP_COLOR["closed"]), "Closed", g["closed"],
-             e(GROUP_HINT["closed"])),
+             e("not a fit, or follow-up done"), s_closed, GROUP_COLOR["closed"]),
         ))
+    rate = f"{100 * g['booked'] / m['calls']:.0f}%" if m["calls"] else "—"
+    parts = [(label, g[k], GROUP_COLOR[k]) for k, label in GROUPS]
+    legend = "".join(f"<div class='it' title='{e(GROUP_HINT[k])}'><span class='key' style='background:{GROUP_COLOR[k]}'></span>"
+                     f"{e(label)}<b>{g[k]}</b><small>{100 * g[k] / m['calls']:.0f}%</small></div>" if m["calls"] else ""
+                     for k, label in GROUPS)
+    chart_row = (f"<div class='charts'><div class='card'><div class='cardhead'><div><h2>Calls each day</h2>"
+                 f"<p class='sub'>Booked, waiting for a follow-up, or closed</p></div><div class='legend'>"
+                 + "".join(f"<span><span class='key' style='background:{GROUP_COLOR[k]}'></span>{label}</span>" for k, label in GROUPS)
+                 + f"</div></div><div class='chart'>{_stacked_svg(m['per_day_groups'])}<div class='tip' role='tooltip'></div></div></div>"
+                 f"<div class='card'><div class='cardhead'><div><h2>How calls ended</h2>"
+                 f"<p class='sub'>{_plural(m['calls'], 'call')} {plabel}</p></div></div>"
+                 f"<div class='donutwrap'>{_donut(parts, rate, 'booked')}<div class='dlegend'>{legend}</div></div></div></div>")
 
     if todo:
         items = "".join(_call_item(c, token, now, todo=(text, u), back=_q("/dashboard", token, period=period))
@@ -1140,7 +1347,7 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
     top_reasons = "".join(f"<li style='display:flex;justify-content:space-between;padding:6px 0'><span>{e(REASON_SHORT.get(r, r))}</span>"
                           f"<b>{n}</b></li>" for r, n in sorted(m["reasons"], key=lambda x: -x[1])[:3])
     body = (f"{_hello(now, headline)}{banner}"
-            f"<div class='stats'>{stats}</div>"
+            f"<div class='kpis'>{stats}</div>{chart_row}"
             f"<div class='grid2'><div class='card'><div class='cardhead'><div><h2>Your to-do list</h2>"
             f"<p class='sub'>Callers someone at the studio should get back to (last 7 days)</p></div></div>{todo_html}</div>"
             f"<div class='stack'><div class='card'><div class='cardhead'><h2>Latest calls</h2>"
@@ -1225,6 +1432,15 @@ def render_reports(m: dict, period: str, token: str, setup_open: bool = False) -
                f"<p class='sub' style='margin-top:12px'>Designers see each of these in the 7pm email and can overturn any of "
                f"them from the call's page.</p></div>")
 
+    ph = m.get("per_hour") or [0] * 24
+    after_n = sum(v for h, v in enumerate(ph) if h < 10 or h >= 19)
+    share = f"{100 * after_n / m['calls']:.0f}%" if m["calls"] else "—"
+    hours = (f"<div class='card hours' style='margin-top:16px'><div class='cardhead'><div><h2>When calls come in</h2>"
+             f"<p class='sub'>{share} of calls {plabel} ({after_n}) came outside the front desk's 10am–7pm hours: "
+             f"calls that used to wait until the next morning.</p></div><div class='legend'>"
+             f"<span><span class='key' style='background:var(--series-1)'></span>Studio hours</span>"
+             f"<span><span class='key' style='background:var(--series-2)'></span>After hours</span></div></div>"
+             f"{_hours_svg(ph)}</div>")
     speed = "".join([
         _tile("Time to answer", _fmt_secs(m["median_answer_sec"]), "typical call; the goal is under 5 minutes"),
         _tile("After-hours calls", m["after_hours"], "outside 10am–7pm", _delta(m["after_hours"], prev and prev["after_hours"], vs=vs)),
@@ -1251,7 +1467,7 @@ def render_reports(m: dict, period: str, token: str, setup_open: bool = False) -
             f"{_delta(m['booked_any'], prev and prev['booked_any'], vs=vs)}</p></div>"
             f"<a class='btn' href='{e(_q('/dashboard/export.csv', token, period=period))}'>{_icon('download')}Download spreadsheet</a></div>"
             f"<div class='card'><div class='cardhead'><h2>Where the calls went</h2></div><div class='funnel'>{funnel}</div></div>"
-            f"<div class='grid2'>{chart}{reasons}</div>"
+            f"<div class='grid2'>{chart}{reasons}</div>{hours}"
             f"<p class='section-title'>Speed and coverage</p><div class='tiles'>{speed}</div>"
             f"<p class='section-title'>After the booking</p><div class='tiles'>{after}</div>"
             f"<p class='section-title'>Cost</p><div class='tiles'>{cost}</div>")
@@ -1629,7 +1845,8 @@ def render_call(c: dict, events: list[dict] | None = None, token: str = "", flas
     ini = _initials(c)
     summary = (f"<p class='sub' style='margin-top:10px'>Phone system's summary: {e(c['summary'])}</p>" if c.get("summary") else "")
     body = (f"<a class='back' href='{e(_q('/dashboard/calls', token))}'>{_icon('back')}Back</a>"
-            f"<div class='callhead'><span class='avatar' aria-hidden='true'>{e(ini) if ini else _icon('user', 24)}</span>"
+            f"<div class='callhead'><span class='avatar' style='--h:{_hue(_caller(c))}' aria-hidden='true'>"
+            f"{e(ini) if ini else _icon('user', 24)}</span>"
             f"<div><h1>{e(_caller(c))}</h1><div class='meta'>{_badge(c)}<span>{e(_when(c))}"
             f"{' · after hours' if c.get('after_hours') else ''}</span>{_interest(score)}</div></div></div>"
             f"{nextcard}"
