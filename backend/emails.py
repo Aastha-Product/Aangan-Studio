@@ -46,7 +46,10 @@ slot_text = _slot_text
 
 def _project_line(f: dict) -> str:
     kind = f.get("property_description") or f.get("property_category") or "project"
-    return f"{kind} {f.get('location_text') or ''}".strip()
+    area = f.get("location_text") or ""
+    if area and area.split(" —")[0].lower() in kind.lower():
+        area = ""                                     # "4BHK in Koregaon Park" already names the area
+    return f"{kind} {area}".strip()
 
 
 def plain_reason(row: dict) -> str:

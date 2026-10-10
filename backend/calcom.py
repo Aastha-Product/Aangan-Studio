@@ -106,13 +106,14 @@ def booking_from_payload(trigger: str, p: dict) -> dict:
     att = (p.get("attendees") or [{}])[0]
     meta = p.get("metadata") or {}
     old = p.get("rescheduleUid")
-    responses = p.get("responses") or {}
+    responses = p.get("responses") or p.get("bookingFieldsResponses") or {}
     phone = att.get("phoneNumber") or _response_value(responses.get("attendeePhoneNumber"))
     # Where the consultation is: the caller's address = site visit; the event's own address = the studio.
+    # A live booking (10 Oct 2026) reported the caller's address as "attendeeInPerson"; the docs say "attendeeAddress".
     loc = responses.get("location") or {}
     loc_type = (loc.get("value") if isinstance(loc.get("value"), str) else "") if isinstance(loc, dict) else ""
     visit_type, site_address = None, None
-    if loc_type == "attendeeAddress":
+    if loc_type in ("attendeeInPerson", "attendeeAddress"):
         visit_type, site_address = "site_visit", (loc.get("optionValue") if isinstance(loc, dict) else None) or p.get("location")
     elif loc_type in ("inPerson", "address"):
         visit_type = "studio"

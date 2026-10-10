@@ -159,7 +159,8 @@ class Webhooks(CalcomBase):
         return self._booking(uid="bk_vaani1", metadata={},
                              attendees=[{"name": "Priya Kulkarni", "email": "priya.k@gmail.com", "timeZone": "Asia/Kolkata",
                                          **attendee}],
-                             responses={"location": {"value": "attendeeAddress", "optionValue": "Flat 302, Kothrud"}})
+                             # shape seen in a live Cal.com booking (10 Oct 2026)
+                             responses={"location": {"value": "attendeeInPerson", "optionValue": "Flat 302, Kothrud"}})
 
     def test_vaani_booking_matched_by_phone_then_report_card_after_the_call(self):
         self._live_call("v-other", "+919800000001")
