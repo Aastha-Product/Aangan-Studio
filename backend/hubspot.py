@@ -42,6 +42,11 @@ def create_deal(contact_id: str, deal_name: str) -> str:
     return request_json("POST", f"{API}/crm/v3/objects/deals", _h(), body)["id"]
 
 
+def update_deal(deal_id: str, props: dict) -> dict:
+    assert "amount" not in props          # THE CUT — no pricing anywhere
+    return request_json("PATCH", f"{API}/crm/v3/objects/deals/{deal_id}", _h(), {"properties": props})
+
+
 def get_deal(deal_id: str) -> dict:
     q = "properties=dealname,dealstage,pipeline,amount&associations=contacts"
     return request_json("GET", f"{API}/crm/v3/objects/deals/{deal_id}?{q}", _h())

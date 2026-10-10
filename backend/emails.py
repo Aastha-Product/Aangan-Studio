@@ -41,6 +41,9 @@ def _slot_text(row: dict) -> str:
     return spoken_label(parse_time(row["slot_start"])) if row.get("slot_start") else "not booked"
 
 
+slot_text = _slot_text
+
+
 def _project_line(f: dict) -> str:
     kind = f.get("property_description") or f.get("property_category") or "project"
     return f"{kind} {f.get('location_text') or ''}".strip()
@@ -79,7 +82,9 @@ def report_card(row: dict) -> tuple[str, str, str]:
 
     subject = (f"[{row.get('priority') or 'P2'}] Consultation {_slot_text(row)} — {name}, "
                f"{_project_line(f)} — Interest {row.get('score', 0)}/100")
-    where = (f"Site visit — {row['site_address']}" if row.get("site_address") else "Site visit")         if row.get("visit_type") == "site_visit" else "Studio"
+    where = ((f"Site visit — {row['site_address']}" if row.get("site_address") else "Site visit")
+             if row.get("visit_type") == "site_visit" else "At the studio" if row.get("visit_type") == "studio"
+             else "Place not recorded: see the calendar invite")
     text = f"""CONSULTATION BOOKED: {_slot_text(row)} · {where}
 Booking: {row.get('event_uri') or '—'} ({row.get('booking_provider') or 'calendar'}) · Reschedule/cancel links are with the client
 PRIORITY: {row.get('priority') or 'P2'} — {p_reason}

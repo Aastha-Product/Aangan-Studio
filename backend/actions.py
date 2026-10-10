@@ -203,28 +203,32 @@ def match_recent_call(store, b: dict, now: datetime | None = None) -> tuple[dict
 def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
     """kind: created | rescheduled | cancelled | no_show | no_show_cleared."""
     row = _find_booking_row(store, b)
-    store.log_event(row and row["call_id"], f"{source}_webhook", {"kind": kind, "ref": b.get("ref")})
+    log = lambda r: store.log_event(r and r["call_id"], f"{source}_webhook", {"kind": kind, "ref": b.get("ref")})  # noqa: E731
 
     if kind in ("no_show", "no_show_cleared"):
+        log(row)
         if not row:
             return "no matching call"
         if kind == "no_show":
             row = store.update_call(row["call_id"], {"status": "no_show"})
             s, t = emails.front_desk_alert("No-show at consultation: please follow up", row)
             notify(store, row["call_id"], config.FRONT_DESK_EMAIL, s, t)
+            _hubspot_note(store, row, "The caller didn't show up for the consultation. Front desk to follow up.")
         else:
             store.update_call(row["call_id"], {"status": "booked"})
         return kind
 
     if kind in ("created", "rescheduled"):
+        how = ""
         if not row and not b.get("old_ref"):   # booked by Vaani's own calendar tool: find the call it came from
             row, how = match_recent_call(store, b)
-            if row:
-                store.log_event(row["call_id"], "booking_matched", {"by": how, "ref": b.get("ref")})
         if not row:  # booked directly on the calendar page, not via the agent
             row = store.upsert_call({"call_id": f"{source}-{(b.get('ref') or '').rsplit('/', 1)[-1].replace(':', '-')}",
                                      "status": "booked", "caller_name": b.get("invitee_name"),
                                      "caller_number": b.get("invitee_phone")})
+        log(row)                                    # logged against the call it belongs to, once that is known
+        if how:
+            store.log_event(row["call_id"], "booking_matched", {"by": how, "ref": b.get("ref")})
         is_reschedule = kind == "rescheduled" or bool(b.get("old_ref")) or bool(row.get("report_card_sent_at"))
         row = store.update_call(row["call_id"], {
             "status": "booked", "slot_start": b.get("slot_start"), "event_uri": b.get("event"),
@@ -242,11 +246,13 @@ def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
         if is_reschedule:
             s, t = emails.time_changed(row)
             notify(store, row["call_id"], row.get("designer_email") or config.DESIGNER_EMAILS, s, t)
+            _hubspot_note(store, row, f"Consultation moved to {emails.slot_text(row)}.")
             return "rescheduled"
         maybe_send_report_card(store, row["call_id"])
         return "booked"
 
     if kind == "cancelled":
+        log(row)
         if not row:
             return "no matching call"
         row = store.update_call(row["call_id"], {"status": "cancelled"})
@@ -254,8 +260,21 @@ def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
         notify(store, row["call_id"], row.get("designer_email") or config.DESIGNER_EMAILS, s, t)
         s, t = emails.front_desk_alert("Consultation cancelled: call back next working morning", row)
         notify(store, row["call_id"], config.FRONT_DESK_EMAIL, s, t)
+        _hubspot_note(store, row, f"Consultation ({emails.slot_text(row)}) cancelled by the caller. "
+                                  "Front desk to call back next working morning.")
         return "cancelled"
     return f"ignored {kind}"
+
+
+def _hubspot_note(store, row: dict, text: str) -> None:
+    """Keep the HubSpot deal truthful after a cancellation, no-show or new time (the stage is the designer's to move)."""
+    if not (config.HUBSPOT_TOKEN and row and row.get("hubspot_deal_id")):
+        return
+    try:
+        hubspot.update_deal(row["hubspot_deal_id"], {"description": f"{datetime.now(config.IST):%d %b %Y}: {text}"})
+        store.log_event(row["call_id"], "hubspot_updated", {"note": text})
+    except Exception as e:  # noqa: BLE001
+        store.log_event(row["call_id"], "hubspot_failed", {"error": str(e)[:300]})
 
 
 def handle_calendly_event(store, body: dict) -> str:

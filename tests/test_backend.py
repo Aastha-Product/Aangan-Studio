@@ -50,6 +50,8 @@ class FakeHTTP:
             return 201, b'{"id":"D1"}'
         if "deals/batch/read" in url:
             return 200, b'{"results":[{"id":"D1","properties":{"hs_is_closed_won":"true","hs_is_closed":"true"}}]}'
+        if method == "PATCH" and "/crm/v3/objects/deals/" in url:
+            return 200, b'{"id":"D1"}'
         return 404, b'{"error":"unexpected url in test"}'
 
     def emails(self):

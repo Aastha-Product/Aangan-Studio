@@ -1239,7 +1239,8 @@ EVENT_LABELS = {
     "calendly_webhook": "Calendar update", "recording": "Call recording", "speech_guard_block": "Price question deflected",
     "price_spoken": "Agent spoke a price", "hubspot_failed": "HubSpot update FAILED", "error": "Error",
     "vaani_webhook": "Phone system", "dashboard_done": "Marked as done", "dashboard_reopen": "Reopened",
-    "dashboard_overturn": "Rejection overturned",
+    "dashboard_overturn": "Rejection overturned", "booking_matched": "Booking linked to this call",
+    "hubspot_updated": "HubSpot deal updated",
 }
 
 
@@ -1268,6 +1269,10 @@ def _event_line(ev: dict) -> str:
         detail = "the agent's line was replaced before the caller heard it"
     elif kind.startswith("dashboard_"):
         detail = " · ".join(x for x in ((f"by {p['by']}" if p.get("by") else ""), p.get("note") or "") if x)
+    elif kind == "booking_matched":
+        detail = f"matched by {p.get('by') or 'the call details'}"
+    elif kind == "hubspot_updated":
+        detail = p.get("note") or ""
     else:
         detail = p.get("error") or ""
     return f"<span><span class='{'bad' if bad else ''}'>{e(label)}</span>{': ' + e(detail) if detail else ''}</span>"
@@ -1351,8 +1356,13 @@ def render_call(c: dict, events: list[dict] | None = None, token: str = "", flas
         chips.append(("Referred by ", f["referrer_name"]))
     fact_chips = "".join(f"<span class='fact'>{e(k)}<b>{e(str(v))}</b></span>" for k, v in chips)
 
+    slot = f" for {_slot(c.get('slot_start'))}" if c.get("slot_start") else ""
     if c.get("status") == "booked":
-        why = f"A good fit, and booked for {_slot(c.get('slot_start'))}." if c.get("slot_start") else "A good fit, and booked."
+        why = f"A good fit, and booked{slot}."
+    elif c.get("status") == "cancelled":
+        why = f"A good fit and booked{slot}, but the caller cancelled. The front desk should call them back."
+    elif c.get("status") == "no_show":
+        why = f"A good fit and booked{slot}, but the caller didn't show up."
     elif c.get("decision") == "Qualified":
         why = "A good fit, but no slot was booked on the call."
     elif c.get("decision") == "Escalate":

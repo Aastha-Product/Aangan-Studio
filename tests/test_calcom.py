@@ -169,8 +169,10 @@ class Webhooks(CalcomBase):
         self.assertEqual((row["status"], row["visit_type"], row["site_address"], row["booked_on_call"]),
                          ("booked", "site_visit", "Flat 302, Kothrud", True))
         self.assertEqual(self.store.find_call("invitee_uri", "calcom:bk_vaani1")["call_id"], "v-priya")  # no orphan row
-        self.assertTrue(any(e["kind"] == "booking_matched" and e["payload"]["by"] == "phone number"
-                            for e in self.store.list_call_events("v-priya")))
+        kinds = {e["kind"]: e["payload"] for e in self.store.list_call_events("v-priya")}
+        self.assertEqual(kinds["booking_matched"]["by"], "phone number")
+        self.assertEqual(kinds["calcom_webhook"]["kind"], "created")          # logged against the call, not None
+        self.assertFalse(any(e["kind"] == "calcom_webhook" and not e["call_id"] for e in self.store.events))
         self.assertEqual(self.http.emails(), [])                              # not qualified yet: no card
         # the call ends; qualification runs and the report card goes out
         from backend import actions
@@ -222,3 +224,9 @@ class Webhooks(CalcomBase):
         self._post("BOOKING_CANCELLED", self._booking(uid="bk_new456", metadata={}))
         self.assertEqual(self.store.get_call("c9")["status"], "cancelled")
         self.assertTrue(any(e["subject"].startswith("Cancelled") for e in self.http.emails()))
+        # HubSpot is told: the deal's description says it was cancelled (and the amount is never touched)
+        patches = [p for m, u, p in self.http.calls if m == "PATCH" and "/crm/v3/objects/deals/D1" in u]
+        self.assertIn("cancelled by the caller", patches[-1]["properties"]["description"])
+        self.assertNotIn("amount", patches[-1]["properties"])
+        page = wsgi("GET", "/dashboard/call?call_id=c9&token=dash_test")[1]
+        self.assertIn("but the caller cancelled", page)
