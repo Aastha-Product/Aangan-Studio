@@ -133,11 +133,7 @@ def app(environ, start_response):
         if path == "/dashboard/login":
             if method == "POST":
                 form = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
-                code, nxt = (form.get("code") or [""])[0].strip(), _safe_next((form.get("next") or [""])[0])
-                store.log_event(None, "login_debug", {"body_len": len(raw), "content_length": environ.get("CONTENT_LENGTH"),
-                                                      "keys": sorted(form), "next": (form.get("next") or [""])[0],
-                                                      "query_keys": sorted(query), "ctype": environ.get("CONTENT_TYPE")})
-                if config.DASHBOARD_TOKEN and code and hmac.compare_digest(code, config.DASHBOARD_TOKEN):
+                code, nxt = (form.get("code") or [""])[0].strip(), _safe_next((form.get("next") or [""])[0])                if config.DASHBOARD_TOKEN and code and hmac.compare_digest(code, config.DASHBOARD_TOKEN):
                     return _resp(start_response, "303 See Other", "", "text/plain", [("Location", nxt), _auth_cookie()])
                 return _resp(start_response, "401 Unauthorized", dashboard.render_login(nxt, error=True), "text/html")
             return _resp(start_response, "200 OK", dashboard.render_login(_safe_next((query.get("next") or [""])[0])),
