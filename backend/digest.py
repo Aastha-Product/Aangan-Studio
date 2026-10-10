@@ -29,6 +29,8 @@ def build(store, now: datetime | None = None):
 
 def run(store, now: datetime | None = None) -> dict:
     now = now or config.now_ist()
+    from . import webcall
+    webcall.sweep(store, limit=20)          # finish any web calls still waiting for their transcript
     rows, follow_ups = build(store, now)
     subject, text, html = emails.digest(rows, follow_ups, now.strftime("%a %d %b"))
     sent = actions.notify(store, None, config.DESIGNER_EMAILS, subject, text, html,

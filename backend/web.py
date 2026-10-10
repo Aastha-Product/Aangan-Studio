@@ -13,6 +13,8 @@ GET  /dashboard/call         one call: checks, score, quotes, transcript, activi
 POST /dashboard/call/action  mark a follow-up done / reopen it / overturn a rejection (dashboard token)
 GET  /dashboard/export.csv   the period's calls as a spreadsheet
 POST /api/admin/migrate     create/update the Neon tables once (Bearer CRON_SECRET)
+GET  /call                   public "Talk to Aangan Studio" page: web call with the agent (no phone number)
+POST /api/webcall/start|end  GET /api/webcall/status   (backend/webcall.py)
 GET  /api/health
 """
 import hmac
@@ -23,7 +25,7 @@ import urllib.parse
 from datetime import timedelta
 from http.cookies import SimpleCookie
 
-from . import actions, auth, calcom, calendly, config, dashboard, digest, emails, vaani
+from . import actions, auth, calcom, calendly, config, dashboard, digest, emails, vaani, webcall
 from .store import default_store, utcnow
 
 _store = None
@@ -158,6 +160,23 @@ def app(environ, start_response):
         if path in ("/dashboard/login", "/dashboard/signup", "/dashboard/logout"):
             return _auth_route(start_response, store, environ, path, method, query, raw)
 
+        # --- web calls (public: this is where callers talk to the agent) ---
+        if path == "/call":
+            return _resp(start_response, "200 OK", webcall.render_page(), "text/html")
+        if path in ("/api/webcall/start", "/api/webcall/end") and method == "POST":
+            try:
+                body = json.loads(raw or b"{}")
+            except ValueError:
+                body = {}
+            if path == "/api/webcall/start":
+                status, out = webcall.start(store, _client_ip(environ), str(body.get("name") or ""))
+            else:
+                status, out = webcall.end(store, str(body.get("room") or ""), body.get("seconds"))
+            return _resp(start_response, status, out)
+        if path == "/api/webcall/status":
+            status, out = webcall.status(store, (query.get("room") or [""])[0])
+            return _resp(start_response, status, out)
+
         if path in ("/", "/dashboard", "/dashboard/calls", "/dashboard/reports", "/dashboard/setup",
                     "/dashboard/call", "/dashboard/call/action", "/dashboard/export.csv"):
             if method == "POST":   # dashboard forms send the token in the body
@@ -201,6 +220,8 @@ def app(environ, start_response):
             if period not in ("1", "7", "30", "mtd"):
                 period = "30"
             days = None if period == "mtd" else int(period)
+            if path in ("/", "/dashboard", "/dashboard/calls"):
+                webcall.sweep(store, limit=2)       # finish web calls whose page closed before the transcript was ready
             calls, blocks, now = store.list_calls(), store.list_events("speech_guard_block"), config.now_ist()
             m = dashboard.compute_metrics(calls, blocks, now, days)
             if path == "/dashboard/export.csv":

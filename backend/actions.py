@@ -101,9 +101,14 @@ def process_completed_call(store, call_id: str, transcript: str, started_at: dat
         status = "booked"
         res.flags.insert(0, f"⚠ Booked on the call, but the five checks say {res.decision}"
                             f"{' (' + res.reason_code + ')' if res.reason_code else ''}. Review before the consultation")
+    f = record["fields"]
+    spoken_email = (f.get("caller_email") or "").strip().lower()
     changes = {
         "call_id": call_id, "transcript": transcript, "fields": record["fields"],
         "caller_name": row.get("caller_name") or record["fields"].get("caller_name"),
+        # web calls have no caller ID: the number and email the caller said are the callback details
+        "caller_number": row.get("caller_number") or (f.get("caller_phone") or None),
+        "invitee_email": row.get("invitee_email") or (spoken_email if "@" in spoken_email else None),
         "decision": res.decision, "priority": res.priority or None, "reason_code": res.reason_code or None,
         "all_fail_codes": res.all_fail_codes, "gates": [asdict(g) for g in res.gates],
         "score": res.score, "score_lines": [asdict(l) for l in res.score_lines], "flags": res.flags,
@@ -116,7 +121,7 @@ def process_completed_call(store, call_id: str, transcript: str, started_at: dat
 
     if res.decision == "Escalate" and not row.get("escalated_at"):
         f = record["fields"]
-        escalate(store, call_id, row.get("caller_number"), f.get("caller_name") or "",
+        escalate(store, call_id, changes["caller_number"], f.get("caller_name") or "",
                  f.get("property_description") or "", f.get("existing_client_quote") or "existing client complaint")
     if res.decision == "Qualified" and status == "booking_pending" and row.get("status") != "booking_pending":
         booking_pending(store, call_id, "qualified on the call but no slot was booked")

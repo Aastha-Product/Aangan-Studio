@@ -141,6 +141,18 @@ class LocalStore:
     def list_call_events(self, call_id):
         return [copy.deepcopy(e) for e in self.events if e.get("call_id") == call_id]
 
+    def claim_processing(self, call_id, stale_after_sec=180):
+        with self._lock:
+            c = self.calls.get(call_id)
+            if not c or c.get("processed_at"):
+                return False
+            started = c.get("processing_started_at")
+            if started and (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds() < stale_after_sec:
+                return False
+            c["processing_started_at"] = utcnow()
+            self._save()
+            return True
+
     def event_stats(self, kind, since_iso=None, subject_prefix=None):
         hits = [e for e in self.events if _event_matches(e, kind, since_iso, subject_prefix)]
         return len(hits), max((e["created_at"] for e in hits), default=None)
@@ -299,6 +311,13 @@ class PostgresStore:
 
     def list_call_events(self, call_id):
         return self._run("select * from call_events where call_id = %s order by created_at", (call_id,))
+
+    def claim_processing(self, call_id, stale_after_sec=180):
+        """Atomically mark a call as being processed; False if it's done or someone else is on it (and not stuck)."""
+        r = self._run("update calls set processing_started_at = now() where call_id = %s and processed_at is null "
+                      "and (processing_started_at is null or processing_started_at < now() - make_interval(secs => %s)) "
+                      "returning call_id", (call_id, stale_after_sec), "one")
+        return bool(r)
 
     def event_stats(self, kind, since_iso=None, subject_prefix=None):
         """(count, latest created_at) for one kind of event, without loading payloads."""

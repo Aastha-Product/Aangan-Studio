@@ -125,6 +125,7 @@ alter table sessions enable row level security;
 alter table auth_attempts enable row level security;
 alter table app_settings enable row level security;
 
+alter table calls add column if not exists channel text;             -- web (browser call) | phone
 alter table calls add column if not exists handled_at timestamptz;   -- follow-up done (dashboard "Mark as done")
 alter table calls add column if not exists handled_by text;
 alter table calls add column if not exists handled_note text;

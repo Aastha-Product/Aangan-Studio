@@ -399,7 +399,7 @@ class OtherEndpoints(Base):
         self.assertIn("Cost per call", wsgi("GET", "/dashboard/reports?token=dash_test")[1])
         setup = wsgi("GET", "/dashboard/setup?token=dash_test")[1]
         self.assertIn("COST_VAANI_INR_PER_MIN", setup)       # missing rate is surfaced, not hidden
-        self.assertIn("Phone line", setup)
+        self.assertIn("Web calls", setup)
         self.store.log_event("d1", "email_sent", {"to": ["designer@aangan.test"], "subject": "Report card for d1"})
         status, page = wsgi("GET", "/dashboard/call?call_id=d1&token=dash_test")
         self.assertTrue(status.startswith("200"))
@@ -559,6 +559,88 @@ class SignIn(Base):
         from datetime import datetime as dt, timedelta as td, timezone as tz
         self.store.create_session(self.auth._token_hash("old"), None, dt.now(tz.utc) - td(minutes=1))
         self.assertEqual(self.req("GET", "/dashboard", cookie="aangan_session=old")[0], "401")
+
+
+class WebCalls(Base):
+    """Browser calls through Vaani WebRTC: start, end, transcript pulled after the call, limits, sweep."""
+
+    ROOM = "webrtc-1791626492-68a7feca"
+
+    def setUp(self):
+        super().setUp()
+        from backend import vaani, webcall
+        self.vaani, self.webcall = vaani, webcall
+        for p in (mock.patch.object(config, "VAANI_API_KEY", "vaani_key"),
+                  mock.patch.dict("os.environ", {"VAANI_AGENT_ID": "agent-1"})):
+            p.start()
+            self.patches.append(p)
+        self.started = []
+        self.transcript = None
+        fake_start = lambda name: (self.started.append(name) or  # noqa: E731
+                                   {"token": "jwt", "room_name": self.ROOM, "connection_url": "https://server.vaanivoice.ai"})
+        for p in (mock.patch.object(vaani, "start_web_call", side_effect=fake_start),
+                  mock.patch.object(vaani, "get_transcript", side_effect=lambda room: self.transcript),
+                  mock.patch.object(vaani, "get_summary", return_value="Caller wants a 2BHK in Wakad redone.")):
+            p.start()
+            self.patches.append(p)
+
+    def post(self, path, body, ip="10.0.0.9"):
+        data = json.dumps(body).encode()
+        return wsgi("POST", path, data, {"CONTENT_TYPE": "application/json", "REMOTE_ADDR": ip})
+
+    def test_public_page_needs_no_sign_in(self):
+        status, page = wsgi("GET", "/call")
+        self.assertTrue(status.startswith("200"))
+        self.assertIn("Start web call", page)
+        self.assertIn("livekit-client@2.18.10", page)
+
+    def test_full_web_call(self):
+        status, out = self.post("/api/webcall/start", {"name": "Priya"})
+        out = json.loads(out)
+        self.assertEqual((out["room"], out["url"], out["token"]), (self.ROOM, "https://server.vaanivoice.ai", "jwt"))
+        row = self.store.get_call(self.ROOM)
+        self.assertEqual((row["channel"], row["caller_name"]), ("web", "Priya"))
+        # hang up; the transcript isn't ready yet
+        status, out = self.post("/api/webcall/end", {"room": self.ROOM, "seconds": 251})
+        self.assertEqual(json.loads(out), {"done": False})
+        self.assertEqual(self.store.get_call(self.ROOM)["duration_sec"], 251)
+        # Vaani has the transcript now: processed once, with the spoken phone + email as callback details
+        self.transcript = "AGENT: Hello, Aangan Studio.\n\n USER: Hi, I have a 3BHK in Kothrud.\n\n AGENT: Lovely."
+        fields = {**t01_fields(), "caller_phone": "+919876543210", "caller_email": "Priya.K@Gmail.com"}
+        with mock.patch.object(actions, "extract_fields", return_value={"fields": fields, "usage": {}}) as ext:
+            out = json.loads(wsgi("GET", f"/api/webcall/status?room={self.ROOM}")[1])
+            out2 = json.loads(wsgi("GET", f"/api/webcall/status?room={self.ROOM}")[1])
+        self.assertEqual((out, out2, ext.call_count), ({"done": True}, {"done": True}, 1))
+        row = self.store.get_call(self.ROOM)
+        self.assertEqual((row["decision"], row["caller_number"], row["invitee_email"]),
+                         ("Qualified", "+919876543210", "priya.k@gmail.com"))
+        self.assertTrue(row["transcript"].startswith("Agent: Hello"))
+        self.assertEqual(row["summary"], "Caller wants a 2BHK in Wakad redone.")
+        page = wsgi("GET", f"/dashboard/call?call_id={self.ROOM}&token=dash_test")[1]
+        self.assertIn("Priya", page)
+
+    def test_limits_and_bad_rooms(self):
+        for _ in range(6):
+            self.assertTrue(self.post("/api/webcall/start", {})[0].startswith("200"))
+        status, out = self.post("/api/webcall/start", {})
+        self.assertTrue(status.startswith("429"))
+        self.assertIn("several calls", json.loads(out)["error"])
+        self.assertTrue(self.post("/api/webcall/start", {}, ip="10.0.0.10")[0].startswith("200"))   # another address is fine
+        self.assertTrue(self.post("/api/webcall/end", {"room": "../../etc"})[0].startswith("404"))
+        self.assertTrue(wsgi("GET", "/api/webcall/status?room=E2E-TEST-1")[0].startswith("404"))  # only web calls
+
+    def test_not_configured(self):
+        with mock.patch.object(config, "VAANI_API_KEY", ""):
+            self.assertTrue(self.post("/api/webcall/start", {})[0].startswith("503"))
+
+    def test_sweep_finishes_calls_whose_page_was_closed(self):
+        self.post("/api/webcall/start", {})
+        old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        self.store.update_call(self.ROOM, {"started_at": old})
+        self.transcript = "AGENT: Hello.\n\n USER: Restaurant in Koregaon Park."
+        with mock.patch.object(actions, "extract_fields", return_value={"fields": t01_fields(), "usage": {}}):
+            wsgi("GET", "/dashboard?token=dash_test")                          # opening the dashboard sweeps
+        self.assertTrue(self.store.get_call(self.ROOM)["processed_at"])
 
 
 class Helpers(unittest.TestCase):

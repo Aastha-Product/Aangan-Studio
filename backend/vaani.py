@@ -51,6 +51,37 @@ def set_inbound_number(agent_id: str, number: str) -> dict:
                         {"deployment": {"phone": {"call_type": {"Inbound": number}}}})
 
 
+# --- web calls (WebRTC): the caller talks to the agent from the browser, no phone number needed ----------
+# POST /api/trigger-call/ {medium: "webrtc"} -> {token, room_name, connection_url, live_captions_url}
+# (checked live 10 Oct 2026: a LiveKit room token for "Web User", valid 6 hours). The room name is the call id.
+
+def start_web_call(name: str = "Website caller") -> dict:
+    return request_json("POST", f"{API}/api/trigger-call/", _h(),
+                        {"agent_id": config.env("VAANI_AGENT_ID"), "medium": "webrtc", "name": name[:60] or "Website caller",
+                         "voice_gender": "female", "primary_language": "en", "secondary_language": "hi"})
+
+
+def get_transcript(call_id: str) -> str | None:
+    """The finished call's transcript ('AGENT: …\\n\\n USER: …'), or None while Vaani is still writing it."""
+    from .http import HttpError
+    try:
+        res = request_json("GET", f"{API}/api/transcript/{call_id}", _h()) or {}
+    except HttpError as e:
+        if e.status == 404:
+            return None
+        raise
+    t = res.get("transcript") or ""
+    return t if t and "not found" not in t.lower()[:80] else None
+
+
+def get_summary(call_id: str) -> str | None:
+    try:
+        s = (request_json("GET", f"{API}/api/call_details/{call_id}", _h()) or {}).get("summary")
+    except Exception:  # noqa: BLE001 — the summary is a nice-to-have
+        return None
+    return s if s and len(s) > 20 else None
+
+
 # --- webhooks -------------------------------------------------------------------------------
 
 def verify(raw_body: bytes, signature_header: str | None, query_key: str | None, secret: str | None = None) -> bool:

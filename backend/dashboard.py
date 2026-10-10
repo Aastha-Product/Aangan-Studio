@@ -274,7 +274,8 @@ def _date(iso):
 
 def _caller(c):
     f = c.get("fields") or {}
-    return c.get("caller_name") or c.get("invitee_name") or f.get("caller_name") or c.get("caller_number") or "Unknown caller"
+    return (c.get("caller_name") or c.get("invitee_name") or f.get("caller_name") or c.get("caller_number")
+            or ("Website caller" if c.get("channel") == "web" else "Unknown caller"))
 
 
 def _project(c):
@@ -1034,9 +1035,9 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
         body = (f"<div class='pagehead'><div><h1>{_greeting(now)}</h1><p class='headline'>Welcome. This is where every call "
                 f"to the studio shows up.</p></div></div>{banner}"
                 f"<div class='card emptybig'><div class='ok'>{_icon('phone', 22)}</div><h2>No calls yet</h2>"
-                f"<p class='sub' style='max-width:480px;margin:8px auto 16px'>Once the studio number forwards to the agent, each "
-                f"call appears here a minute after it ends: who called, what they want, and whether a consultation was booked.</p>"
-                f"<a class='btn primary' href='{e(_q('/dashboard/setup', token))}'>See what's left to set up</a></div>")
+                f"<p class='sub' style='max-width:480px;margin:8px auto 16px'>Callers talk to the agent from the web call page. "
+                f"Each call appears here about a minute after it ends: who called, what they want, and whether a consultation "
+                f"was booked.</p><a class='btn primary' href='/call' target='_blank' rel='noopener'>{_icon('phone')}Try a web call</a></div>")
         return _page("Aangan · Home", body, token, "home", period, flash, refresh=True, setup_open=bool(open_setup))
 
     after = f" ({m['after_hours']} after hours)" if m["after_hours"] else ""
@@ -1077,7 +1078,9 @@ def render_home(m: dict, period: str, token: str, setup: list[dict] | None = Non
     recent = "".join(_call_item(c, token, now, show_day=True) for c in m["rows"][:6]) or "<li class='empty'>No calls in this period.</li>"
     top_reasons = "".join(f"<li style='display:flex;justify-content:space-between;padding:6px 0'><span>{e(REASON_SHORT.get(r, r))}</span>"
                           f"<b>{n}</b></li>" for r, n in sorted(m["reasons"], key=lambda x: -x[1])[:3])
-    body = (f"<div class='pagehead'><div><h1>{_greeting(now)}</h1><p class='headline'>{headline}</p></div></div>{banner}"
+    body = (f"<div class='pagehead'><div><h1>{_greeting(now)}</h1><p class='headline'>{headline}</p></div>"
+            f"<a class='btn' href='/call' target='_blank' rel='noopener' title='Opens the page callers use'>{_icon('phone')}"
+            f"Start a web call</a></div>{banner}"
             f"<div class='stats'>{stats}</div>"
             f"<div class='grid2'><div class='card'><div class='cardhead'><div><h2>Your to-do list</h2>"
             f"<p class='sub'>Callers someone at the studio should get back to (last 7 days)</p></div></div>{todo_html}</div>"
@@ -1220,16 +1223,22 @@ def setup_status(store, now: datetime | None = None) -> list[dict]:
     when = lambda iso: _when({"started_at": iso}) if iso else "never"  # noqa: E731
     out = []
 
+    web, web_t = stats("webcall_started")
+    web_done, _ = stats("webcall_ended")
+    agent_ready = bool(config.VAANI_API_KEY and config.env("VAANI_AGENT_ID"))
+    page = (config.PUBLIC_BASE_URL or "") + "/call"
     out.append({
-        "name": "Phone line", "state": "ok" if vaani else "no",
-        "what": (f"Calls are reaching the app. Last call event: {when(vaani_t)}." if vaani else
-                 "No call has reached this dashboard from Vaani yet."),
-        "fix": None if vaani else [
-            "In Vaani, publish the agent \"Aangan Studio — Front Desk\".",
-            "Give it a phone number (Settings → Telephony) and forward the studio line to it.",
-            "Add this app's webhook address in Vaani → Settings → Webhooks.",
-            "Call the number and check the call appears on the Home page."],
-        "setting": "VAANI_WEBHOOK_SECRET (webhook address: /api/vaani/webhook?key=…)"})
+        "name": "Web calls", "state": "ok" if web_done or vaani else "warn" if agent_ready else "no",
+        "what": (f"Callers talk to the agent from {page} (no phone number needed). Last web call: {when(web_t)}."
+                 if web_done or vaani else
+                 f"The call page is ready at {page}, but no web call has been completed yet." if agent_ready else
+                 "The Vaani agent isn't connected, so web calls can't start."),
+        "fix": None if web_done or vaani else [
+            f"Open {page}, click Start web call, allow the microphone, and talk to the agent as a caller would.",
+            "Hang up; within about a minute the call appears on the Home page with its outcome.",
+            "Then share the page link (website, Instagram bio, WhatsApp) so callers can use it."] if agent_ready else [
+            "Set the Vaani API key and agent id."],
+        "setting": "VAANI_API_KEY, VAANI_AGENT_ID"})
 
     provider = config.BOOKING_PROVIDER
     out.append({
@@ -1310,7 +1319,8 @@ def render_setup(items: list[dict], token: str, todo: int = 0) -> str:
     body = (f"<div class='pagehead'><div><h1>Setup</h1><p class='headline'>{done} of {len(items)} parts are working. "
             f"This page checks itself every time you open it.</p>"
             f"<div class='progress' style='max-width:420px'><span style='width:{100 * done / max(1, len(items)):.0f}%'></span></div>"
-            f"</div></div><div class='card'><ul class='checklist'>{rows}</ul></div>"
+            f"</div><a class='btn primary' href='/call' target='_blank' rel='noopener'>{_icon('phone')}Try a web call</a></div>"
+            f"<div class='card'><ul class='checklist'>{rows}</ul></div>"
             f"<p class='sub' style='margin-top:14px'>Settings live in Vercel → Project → Settings → Environment Variables. "
             f"After changing one, redeploy for it to take effect.</p>")
     return _page("Aangan · Setup", body, token, "setup", todo=todo, setup_open=done < len(items))

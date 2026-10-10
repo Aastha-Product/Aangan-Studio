@@ -59,6 +59,8 @@ FIELDS = {
     "asked_for_price": B, "price_ask_count": {"type": "INTEGER"}, "price_quote": Q,
     "wants_site_visit": B,
     "call_dropped_and_returned": B,
+    # web calls carry no caller ID, so the callback details come from what the caller said
+    "caller_phone": _s(nullable=True), "caller_email": _s(nullable=True),
 }
 
 SCHEMA = {"type": "OBJECT", "properties": FIELDS, "required": list(FIELDS), "propertyOrdering": list(FIELDS)}
