@@ -209,7 +209,8 @@ def match_recent_call(store, b: dict, now: datetime | None = None) -> tuple[dict
 def apply_booking_event(store, kind: str, b: dict, source: str) -> str:
     """kind: created | rescheduled | cancelled | no_show | no_show_cleared."""
     row = _find_booking_row(store, b)
-    log = lambda r: store.log_event(r and r["call_id"], f"{source}_webhook", {"kind": kind, "ref": b.get("ref")})  # noqa: E731
+    log = lambda r: store.log_event(r and r["call_id"], f"{source}_webhook",  # noqa: E731
+                                    {"kind": kind, "ref": b.get("ref"), **({"place": b["raw_location"]} if b.get("raw_location") else {})})
 
     if kind in ("no_show", "no_show_cleared"):
         log(row)

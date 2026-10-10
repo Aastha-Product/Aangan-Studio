@@ -118,6 +118,9 @@ def booking_from_payload(trigger: str, p: dict) -> dict:
     elif loc_type in ("inPerson", "address"):
         visit_type = "studio"
     return {
+        # what Cal.com said about the place, kept on the event log so the format can be checked against live data
+        "raw_location": {"location": p.get("location"), "responses_location": responses.get("location"),
+                         "response_keys": sorted(responses)[:20]},
         "invitee_phone": phone,
         "visit_type": visit_type,
         "site_address": site_address,
